@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>University Chat Assistant - Test Interface</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 20px;
+    }
+    h1, h2 {
+      color: #333;
+    }
+    .container {
+      margin-bottom: 40px;
+      border: 1px solid #ccc;
+      padding: 20px;
+      border-radius: 8px;
+    }
+    textarea {
+      width: 100%;
+      height: 80px;
+    }
+    input[type="text"], input[type="file"] {
+      width: 100%;
+      padding: 8px;
+      margin-bottom: 10px;
+    }
+    button {
+      padding: 10px 20px;
+      cursor: pointer;
+    }
+    .output {
+      border: 1px solid #ddd;
+      padding: 10px;
+      margin-top: 10px;
+      background: #f9f9f9;
+      white-space: pre-wrap;
+      max-height: 250px;
+      overflow-y: auto;
+    }
+    .section {
+      margin-bottom: 30px;
+    }
+  </style>
+</head>
+<body>
+  <h1>University Chat Assistant Test Interface</h1>
+
+  <!-- Chat Section -->
+  <div class="container" id="chat-section">
+    <h2>Chat</h2>
+    <label for="role-select">Select Role:</label>
+    <select id="role-select">
+      <option value="teacher">Teacher</option>
+      <option value="student">Student</option>
+    </select>
+    <br /><br />
+    <label for="session-id">Session ID (optional):</label>
+    <input type="text" id="session-id" placeholder="default">
+    <br /><br />
+    <label for="chat-query">Enter your query:</label>
+    <textarea id="chat-query"></textarea>
+    <button onclick="sendChat()">Send Query</button>
+    <div class="output" id="chat-output"></div>
+    <br />
+    <button onclick="clearChat()">Clear Chat History</button>
+  </div>
+
+  <!-- Documents Section -->
+  <div class="container" id="docs-section">
+    <h2>Documents</h2>
+    <label for="docs-role-select">Select Role:</label>
+    <select id="docs-role-select">
+      <option value="teacher">Teacher</option>
+      <option value="student">Student</option>
+    </select>
+    <button onclick="listDocs()">List Documents</button>
+    <div class="output" id="docs-output"></div>
+    <hr>
+    <h3>Upload a Document</h3>
+    <form id="upload-form">
+      <label for="upload-role-select">Select Role:</label>
+      <select id="upload-role-select">
+        <option value="teacher">Teacher</option>
+        <option value="student">Student</option>
+      </select>
+      <br /><br />
+      <input type="file" id="upload-file" required>
+      <br /><br />
+      <input type="text" id="upload-title" placeholder="Title">
+      <br /><br />
+      <input type="text" id="upload-description" placeholder="Description">
+      <br /><br />
+      <input type="text" id="upload-tags" placeholder="Tags (comma separated)">
+      <br /><br />
+      <button type="submit">Upload Document</button>
+    </form>
+    <div class="output" id="upload-output"></div>
+  </div>
+
+  <!-- Endpoints List Section -->
+  <div class="container" id="endpoints-section">
+    <h2>Available Endpoints</h2>
+    <button onclick="listEndpoints()">List Endpoints</button>
+    <div class="output" id="endpoints-output"></div>
+  </div>
+
+  <script>
+    const baseURL = "http://localhost:8000";
+
+    async function sendChat() {
+      const role = document.getElementById("role-select").value;
+      const sessionId = document.getElementById("session-id").value || "default";
+      const query = document.getElementById("chat-query").value;
+      const endpoint = role === "teacher" ? "/api/teacher/chat" : "/api/student/chat";
+
+      const response = await fetch(baseURL + endpoint, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ query: query, session_id: sessionId })
+      });
+      const data = await response.json();
+      document.getElementById("chat-output").textContent = JSON.stringify(data, null, 2);
+    }
+
+    async function clearChat() {
+      const role = document.getElementById("role-select").value;
+      const sessionId = document.getElementById("session-id").value || "default";
+      const endpoint = `/api/${role}/chat/clear?session_id=${sessionId}`;
+      const response = await fetch(baseURL + endpoint, { method: "POST" });
+      const data = await response.json();
+      alert(data.message);
+      document.getElementById("chat-output").textContent = "";
+    }
+
+    async function listDocs() {
+      const role = document.getElementById("docs-role-select").value;
+      const endpoint = role === "teacher" ? "/api/teacher/docs" : "/api/student/docs";
+      const response = await fetch(baseURL + endpoint);
+      const data = await response.json();
+      document.getElementById("docs-output").textContent = JSON.stringify(data, null, 2);
+    }
+
+    // Upload document handler
+    document.getElementById("upload-form").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const role = document.getElementById("upload-role-select").value;
+      const endpoint = role === "teacher" ? "/api/teacher/docs/upload" : "/api/student/docs/upload";
+      const fileInput = document.getElementById("upload-file");
+      const title = document.getElementById("upload-title").value;
+      const description = document.getElementById("upload-description").value;
+      const tags = document.getElementById("upload-tags").value;
+
+      const formData = new FormData();
+      formData.append("file", fileInput.files[0]);
+      formData.append("title", title);
+      formData.append("description", description);
+      formData.append("tags", tags);
+
+      const response = await fetch(baseURL + endpoint, {
+        method: "POST",
+        body: formData
+      });
+      const data = await response.json();
+      document.getElementById("upload-output").textContent = JSON.stringify(data, null, 2);
+    });
+
+    async function listEndpoints() {
+      const response = await fetch(baseURL + "/api/endpoints");
+      const data = await response.json();
+      document.getElementById("endpoints-output").textContent = JSON.stringify(data, null, 2);
+    }
+  </script>
+</body>
+</html>

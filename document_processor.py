@@ -7,6 +7,8 @@ from pdf2image import convert_from_path
 import tempfile
 from tqdm import tqdm
 from razdel import sentenize
+import warnings
+warnings.filterwarnings("ignore", message="CropBox missing from /Page, defaulting to MediaBox")
 
 # в общем-то оно уникальное, надо его в PATH ещё добавить
 TESSERACT_CMD = 'C:/Program Files/Tesseract-OCR/tesseract.exe'

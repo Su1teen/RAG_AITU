@@ -19,6 +19,8 @@ from langchain.docstore.document import Document
 from langchain.chains.conversational_retrieval.base import ConversationalRetrievalChain
 from langchain.prompts.prompt import PromptTemplate
 from langchain.embeddings.base import Embeddings
+import warnings
+warnings.filterwarnings("ignore", message="CropBox missing from /Page, defaulting to MediaBox")
 
 # ЗАГРУЗКА ENV
 load_dotenv()
@@ -141,7 +143,7 @@ def get_student_prompt_template():
 # ============================================================
 # Инициализация LLM и цепочек QA для учителей и студентов
 # ============================================================
-llm = ChatOpenAI(openai_api_key=OPENAI_API_KEY, temperature=0)
+llm = ChatOpenAI(openai_api_key=OPENAI_API_KEY, temperature=0, model_name="gpt-4o-mini")
 teacher_prompt = PromptTemplate(
     template=get_teacher_prompt_template(),
     input_variables=["context", "question"]
@@ -156,14 +158,14 @@ student_vectorstore = load_or_rebuild_vectorstore(DATA_FOLDER_STUDENTS, INDEXES_
 
 teacher_qa_chain = ConversationalRetrievalChain.from_llm(
     llm,
-    retriever=teacher_vectorstore.as_retriever(),
+    retriever=teacher_vectorstore.as_retriever(search_kwargs={"k": 3}),
     return_source_documents=True,
     combine_docs_chain_kwargs={"prompt": teacher_prompt}
 )
 
 student_qa_chain = ConversationalRetrievalChain.from_llm(
     llm,
-    retriever=student_vectorstore.as_retriever(),
+    retriever=student_vectorstore.as_retriever(search_kwargs={"k": 3}),
     return_source_documents=True,
     combine_docs_chain_kwargs={"prompt": student_prompt}
 )
@@ -281,6 +283,10 @@ class ChatResponse(BaseModel):
 # Создание приложения FastAPI и эндпойнтов
 # ============================================================
 app = FastAPI(title="University Chat Assistant API")
+from fastapi.staticfiles import StaticFiles
+
+app.mount("/static", StaticFiles(directory="static", html=True), name="static")
+
 
 # Эндпойнт для вывода всех маршрутов приложения
 @app.get("/api/endpoints")
@@ -385,4 +391,5 @@ def clear_chat(role: str, session_id: str = "default"):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=8000)
+  # uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
