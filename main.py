@@ -1,7 +1,7 @@
 import os
 import json
 import hashlib
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from fastapi import HTTPException
 from langchain.chains import LLMChain
 
@@ -48,6 +48,17 @@ class MyEmbeddings(Embeddings):
         return self.model.encode([text], convert_to_numpy=True)[0].tolist()
 
 embeddings = MyEmbeddings()
+
+
+
+class ChatHistoryResponse(BaseModel):
+    session_id: str
+    # now each item has an int id plus role/content
+    history: List[Dict[str, Any]]
+
+class ChatDeleteResponse(BaseModel):
+    message: str
+
 
 # ============================================================
 # Функция загрузки/перестроения векторного хранилища
@@ -121,6 +132,7 @@ def get_teacher_prompt_template():
         "Отвечай емко, четко и полно, в несколько абзацев, разбивая ответ на логически структурированные абзацы, "
         "а при необходимости используй нумерованные списки или bullet points для наглядности. "
         "Будь дружелюбным, действуй как надежный друг и ассистент, старайся найти ответ на любой вопрос. Даже очень сложный. "
+        "Отвечай на том языке, на котором запрос. Если человек пишет на русском, то ответ должен быть на русском. Если человек пишет на английском, то и ответ должен быть на английском соответственно."
         "Если в базе данных недостаточно информации, сообщяй, что можно обратиться в офис регистратора.\n\n"
         "Контекст:\n{context}\n\n"
         "Вопрос: {question}\n\n"
@@ -136,6 +148,7 @@ def get_student_prompt_template():
         "Отвечай емко, четко и полно, в несколько абзацев, разбивая ответ на логически структурированные абзацы, "
         "а при необходимости используй нумерованные списки или bullet points для наглядности. "
         "Будь дружелюбным, отзывчивым и всегда старайся помочь студентам с их университетскими запросами. "
+        "Отвечай на том языке, на котором запрос. Если человек пишет на русском, то ответ должен быть на русском. Если человек пишет на английском, то и ответ должен быть на английском соответственно."
         "Если в базе данных недостаточно информации, сообщи, что можно обратиться в офис поддержки.\n\n"
         "Контекст:\n{context}\n\n"
         "Вопрос: {question}\n\n"
@@ -357,12 +370,58 @@ def teacher_flowchart(payload: ChatRequest):
         print("[DEBUG] Failed JSON extraction:", chain_response.content)
         raise HTTPException(status_code=500, detail="LLM ответил невалидным JSON")
 
-    # Debug print to see exactly what the LLM returned
+    # Debug 
     print("[DEBUG] GPT raw content:", chain_response.content)
     print("[DEBUG] Final flowchart_data:", flowchart_data)
 
     return flowchart_data
 
+
+# история чата
+
+@app.post("/api/{role}/chat/clear")
+def clear_chat(role: str, session_id: str = "default"):
+    if role.lower() == "teacher":
+        teacher_assistant.clear_history(session_id)
+    elif role.lower() == "student":
+        student_assistant.clear_history(session_id)
+    return {"message": "История чата очищена"}
+
+@app.get("/api/{role}/chat/history", response_model=ChatHistoryResponse)
+def get_chat_history(role: str, session_id: str = "default"):
+    #dict
+    if role.lower() == "teacher":
+        hist = teacher_assistant.histories.get(session_id, [])
+    elif role.lower() == "student":
+        hist = student_assistant.histories.get(session_id, [])
+    else:
+        raise HTTPException(status_code=404, detail="Role not found")
+        # integer ID (index)
+    conversation = [
+        {"id": idx, "role": r, "content": c}
+        for idx, (r, c) in enumerate(hist)
+    ]
+    # conversation = [{"role": r, "content": c} for r, c in hist]
+    return {"session_id": session_id, "history": conversation}
+@app.delete("/api/{role}/chat/history", response_model=ChatDeleteResponse)
+def delete_chat_message(
+    role: str,
+    session_id: str = "default",
+    message_id: int = None
+):
+    if role.lower() == "teacher":
+        hist = teacher_assistant.histories.get(session_id, [])
+    elif role.lower() == "student":
+        hist = student_assistant.histories.get(session_id, [])
+    else:
+        raise HTTPException(status_code=404, detail="Role not found")
+
+    if message_id is None or message_id < 0 or message_id >= len(hist):
+        raise HTTPException(status_code=400, detail="Invalid message_id")
+
+    # удаляет
+    hist.pop(message_id)
+    return {"message": f"Deleted message {message_id} from session {session_id}"}
 
 
 
@@ -434,6 +493,7 @@ def upload_student_doc(
         "title": doc_info["title"],
         "version": doc_info["version"]
     }
+
 @app.post("/refresh/staff")
 def refresh_staff_index():
     """

@@ -70,6 +70,7 @@
     <div class="output" id="chat-output"></div>
     <br />
     <button onclick="clearChat()">Clear Chat History</button>
+    <button onclick="loadChatHistory()">Load Chat History</button>
   </div>
 
   <!-- Flowchart Section -->
@@ -204,6 +205,62 @@
       alert(data.message);
       document.getElementById("chat-output").textContent = "";
     }
+
+    // Fetch and display the full conversation for a session_id
+    async function loadChatHistory() {
+      const role      = document.getElementById("role-select").value;
+      const sessionId = document.getElementById("session-id").value || "default";
+      const endpoint  = `${baseURL}/api/${role}/chat/history?session_id=${sessionId}`;
+      const resp      = await fetch(endpoint);
+      if (!resp.ok) {
+        alert("Failed to load history");
+        return;
+      }
+      const data = await resp.json();
+
+      // table
+      const table = document.createElement("table");
+      table.style.width = "100%";
+      table.border = "1";
+  
+      table.innerHTML = `
+        <tr>
+          <th>ID</th><th>Role</th><th>Message</th><th>Action</th>
+        </tr>
+        ${data.history.map(item => `
+          <tr>
+            <td>${item.id}</td>
+            <td>${item.role}</td>
+            <td>${item.content.replace(/</g, "&lt;")}</td>
+            <td>
+              <button onclick="deleteMessage('${role}','${sessionId}',${item.id})">
+                Delete
+              </button>
+            </td>
+          </tr>
+        `).join("")}
+      `;
+
+      const output = document.getElementById("chat-output");
+      output.innerHTML = "";       
+      output.appendChild(table);   
+    }
+
+    async function deleteMessage(role, sessionId, messageId) {
+      const endpoint = `${baseURL}/api/${role}/chat/history`
+        + `?session_id=${sessionId}&message_id=${messageId}`;
+      const resp = await fetch(endpoint, { method: "DELETE" });
+      if (resp.ok) {
+        // reload 
+        loadChatHistory();
+      } else {
+        const err = await resp.json();
+        alert("Delete failed: " + (err.detail || err.message));
+      }
+    }
+
+
+
 
     async function listDocs() {
       const role = document.getElementById("docs-role-select").value;
