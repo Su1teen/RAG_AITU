@@ -2,6 +2,8 @@ import os
 import json
 import hashlib
 from typing import List, Optional
+from fastapi import HTTPException
+from langchain.chains import LLMChain
 
 from fastapi import FastAPI, File, UploadFile, Form
 from pydantic import BaseModel
@@ -139,6 +141,24 @@ def get_student_prompt_template():
         "Вопрос: {question}\n\n"
         "Ответ:"
     )
+
+def get_teacher_flowchart_prompt():
+    return (
+        "Ты — умный университетский ассистент Университета AITU. "
+        "Создай ПОДРОБНУЮ и ЧЕТКУЮ блок-схему (flowchart) по алгоритму, основываясь на контексте. "
+        "Ответ строго в JSON-формате ниже. НЕ пиши ничего до или после JSON.\n\n"
+        "Контекст:\n{context}\n\n"
+        "Вопрос: {question}\n\n"
+        "Формат:\n"
+        "{{\n"
+        '  "nodes": [{{"id": "1", "label": "Начало", "type": "start"}}, ...],\n'
+        '  "edges": [{{"from": "1", "to": "2", "condition": "если да"}}, ...],\n'
+        '  "sources": ["название документа (страница X)", ...]\n'
+        "}}\n\n"
+        "Ответ (ТОЛЬКО JSON):"
+    )
+
+
 
 # ============================================================
 # Инициализация LLM и цепочек QA для учителей и студентов
@@ -315,6 +335,38 @@ def student_chat(payload: ChatRequest):
     sources_list = extract_sources_list(source_docs)
     return ChatResponse(answer=answer, sources=sources_list)
 
+import re
+
+@app.post("/api/teacher/flowchart")
+def teacher_flowchart(payload: ChatRequest):
+    relevant_docs = teacher_vectorstore.similarity_search(payload.query, k=3)
+    context = "\n".join([doc.page_content for doc in relevant_docs])
+
+    prompt = PromptTemplate(
+        template=get_teacher_flowchart_prompt(),
+        input_variables=["context", "question"]
+    )
+
+    chain = prompt | llm
+    chain_response = chain.invoke({"context": context, "question": payload.query})
+
+    try:
+        json_text = re.search(r'\{.*\}', chain_response.content, re.DOTALL).group()
+        flowchart_data = json.loads(json_text)
+    except Exception as e:
+        print("[DEBUG] Failed JSON extraction:", chain_response.content)
+        raise HTTPException(status_code=500, detail="LLM ответил невалидным JSON")
+
+    # Debug print to see exactly what the LLM returned
+    print("[DEBUG] GPT raw content:", chain_response.content)
+    print("[DEBUG] Final flowchart_data:", flowchart_data)
+
+    return flowchart_data
+
+
+
+
+
 # ---- Эндпойнты для работы с документами (список и загрузка) ----
 @app.get("/api/teacher/docs")
 def list_teacher_docs():
@@ -344,7 +396,10 @@ def upload_teacher_doc(
         tags=tags_list
     )
     global teacher_vectorstore
+ 
     teacher_vectorstore = load_or_rebuild_vectorstore(DATA_FOLDER_TEACHERS, INDEXES_FOLDER_TEACHERS)
+    
+
     return {
         "message": "Документ успешно загружен",
         "doc_id": doc_info["id"],
