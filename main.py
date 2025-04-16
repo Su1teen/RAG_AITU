@@ -434,6 +434,23 @@ def upload_student_doc(
         "title": doc_info["title"],
         "version": doc_info["version"]
     }
+@app.post("/refresh/staff")
+def refresh_staff_index():
+    """
+    Принудительно пересобрать индекс для сотрудников (teacher/staff).
+    """
+    global teacher_vectorstore
+    teacher_vectorstore = load_or_rebuild_vectorstore(DATA_FOLDER_TEACHERS, INDEXES_FOLDER_TEACHERS)
+    return {"message": "Индекс для сотрудников (Teacher) был успешно пересобран"}
+
+@app.post("/refresh/students")
+def refresh_students_index():
+    """
+    Принудительно пересобрать индекс для студентов.
+    """
+    global student_vectorstore
+    student_vectorstore = load_or_rebuild_vectorstore(DATA_FOLDER_STUDENTS, INDEXES_FOLDER_STUDENTS)
+    return {"message": "Индекс для студентов был успешно пересобран"}
 
 # Дополнительный эндпойнт для очистки истории чата
 @app.post("/api/{role}/chat/clear")
