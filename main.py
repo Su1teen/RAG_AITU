@@ -167,7 +167,7 @@ def get_teacher_flowchart_prompt():
         "- Не добавляй никакого описательного текста и не оборачивай код в разметку (```), только чистый Mermaid.\n"
         "- Используй направление `TD` (сверху вниз) или `LR` (слева направо) в зависимости от структуры алгоритма.\n"
         "- Обозначь начало узлом `[Начало]`, конец — узлом `[Конец]`.\n"
-        "- Для ветвлений применяй ромбовидные узлы `{Условие}`.\n"
+        "- Для ветвлений применяй ромбовидные узлы.\n"
         "- Для всех стрелок указывай текст условия или действия.\n\n"
         "Ответ (ТОЛЬКО Mermaid):"
     )
@@ -381,7 +381,7 @@ def teacher_flowchart(payload: ChatRequest):
 
 # история чата
 
-@app.post("/api/{role}/chat/clear")
+@app.get("/api/{role}/chat/clear")
 def clear_chat(role: str, session_id: str = "default"):
     if role.lower() == "teacher":
         teacher_assistant.clear_history(session_id)
@@ -514,14 +514,7 @@ def refresh_students_index():
     student_vectorstore = load_or_rebuild_vectorstore(DATA_FOLDER_STUDENTS, INDEXES_FOLDER_STUDENTS)
     return {"message": "Индекс для студентов был успешно пересобран"}
 
-# Дополнительный эндпойнт для очистки истории чата
-@app.post("/api/{role}/chat/clear")
-def clear_chat(role: str, session_id: str = "default"):
-    if role.lower() == "teacher":
-        teacher_assistant.clear_history(session_id)
-    elif role.lower() == "student":
-        student_assistant.clear_history(session_id)
-    return {"message": "История чата очищена"}
+
 
 if __name__ == "__main__":
     import uvicorn
