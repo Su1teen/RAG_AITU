@@ -42,8 +42,10 @@
   </style>
 
   <!-- Load React/ReactDOM first -->
+
   <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/mermaid/dist/mermaid.min.js"></script>
 
   <!-- Then load ReactFlow UMD -->
   <script src="https://unpkg.com/reactflow/dist/reactflow.min.js"></script>
@@ -73,69 +75,71 @@
     <button onclick="loadChatHistory()">Load Chat History</button>
   </div>
 
-  <!-- Flowchart Section -->
-  <div class="container" id="flowchart-section">
-    <h2>Flowchart Generator (Teacher)</h2>
-    <label for="flowchart-query">Введите запрос для создания схемы:</label>
-    <textarea id="flowchart-query"></textarea>
-    <button onclick="generateFlowchart()">Создать схему</button>
-    <div class="output" id="flowchart-output"></div>
+<!-- Flowchart Section -->
+<div class="container" id="flowchart-section">
+  <h2>Flowchart Generator (Teacher)</h2>
+  <label for="flowchart-query">Введите запрос для создания схемы:</label><br/>
+  <textarea id="flowchart-query" rows="4" style="width:100%;"></textarea><br/>
+  <button onclick="generateFlowchart()">Создать схему</button>
 
-    <div id="flowchart-visual" style="width: 100%; height: 500px; border: 1px solid #ccc; margin-top: 20px;"></div>
-  </div>
+  <!-- Show raw Mermaid (optional) -->
+  <div class="output" id="flowchart-output"
+       style="white-space: pre-wrap; margin-top:10px;"></div>
 
-  <!-- Put your flowchart code in a proper script block -->
-  <script>
-    const baseURL = "http://localhost:8000";
+  <!-- Rendered diagram -->
+  <div id="flowchart-visual"
+       style="width:100%; height:500px; border:1px solid #ccc; margin-top:20px;"></div>
+</div>
 
-    async function generateFlowchart() {
-      console.log("window.ReactFlow is:", window.ReactFlow);
-      const { ReactFlow, ReactFlowProvider } = window.ReactFlow;
+<!-- Include Mermaid.js once in <head> or before this script -->
+<script src="https://unpkg.com/mermaid/dist/mermaid.min.js"></script>
+<script>
+  const baseURL = "http://localhost:8000";
 
-      const query = document.getElementById("flowchart-query").value;
-      const response = await fetch(baseURL + "/api/teacher/flowchart", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query })
-      });
-      const data = await response.json();
-      console.log("[FLOWCHART DATA]", data);
+  async function generateFlowchart() {
+    // clear old
+    document.getElementById("flowchart-output").textContent = "";
+    document.getElementById("flowchart-visual").innerHTML = "";
 
-      document.getElementById("flowchart-output").textContent = JSON.stringify(data.sources, null, 2);
+    const query = document.getElementById("flowchart-query").value;
+    const res = await fetch(baseURL + "/api/teacher/flowchart", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query })
+    });
 
-      const nodes = data.nodes.map((node, index) => ({
-        id: node.id,
-        data: { label: node.label },
-        position: { x: 250, y: index * 100 },
-        type: node.type || 'default'
-      }));
+    if (!res.ok) {
+      document.getElementById("flowchart-output")
+              .textContent = `Ошибка ${res.status}: ${res.statusText}`;
+      return;
+    }
 
-      const edges = data.edges.map(edge => ({
-        id: `${edge.from}-${edge.to}`,
-        source: edge.from,
-        target: edge.to,
-        label: edge.condition || '',
-        animated: true,
-        type: 'default'
-      }));
+    // parse JSON envelope
+    const { mermaid, sources } = await res.json();
 
-      // Clear existing chart
-      const container = document.getElementById("flowchart-visual");
-      container.innerHTML = "";
+    // display raw Mermaid if you like
+    document.getElementById("flowchart-output").textContent = mermaid;
 
-      // Render in the container
-      ReactDOM.render(
-        React.createElement(ReactFlowProvider, null,
-          React.createElement(ReactFlow, {
-            nodes: nodes,
-            edges: edges,
-            fitView: true
-          })
-        ),
-        container
+    // render the diagram
+    mermaid.initialize({ startOnLoad: false });
+    mermaid.render("mermaidDiagram", mermaid, svgCode => {
+      document.getElementById("flowchart-visual").innerHTML = svgCode;
+    });
+
+    // list sources under the diagram
+    if (sources.length) {
+      const srcDiv = document.getElementById("flowchart-output");
+      srcDiv.insertAdjacentHTML(
+        "beforeend",
+        "\n\n<b>Источники:</b>\n" +
+          sources.map(s => `• ${s}`).join("\n")
       );
     }
-  </script>
+  }
+</script>
+
+
+
 
   <!-- Documents Section -->
   <div class="container" id="docs-section">

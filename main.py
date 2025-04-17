@@ -4,7 +4,8 @@ import hashlib
 from typing import List, Optional, Dict, Any
 from fastapi import HTTPException
 from langchain.chains import LLMChain
-
+from fastapi.responses import PlainTextResponse
+from fastapi.responses import JSONResponse
 from fastapi import FastAPI, File, UploadFile, Form
 from pydantic import BaseModel
 from dotenv import load_dotenv
@@ -167,13 +168,28 @@ def get_teacher_flowchart_prompt():
         "- Не добавляй никакого описательного текста и не оборачивай код в разметку (```), только чистый Mermaid.\n"
         "- Используй направление `TD` (сверху вниз) или `LR` (слева направо) в зависимости от структуры алгоритма.\n"
         "- Обозначь начало узлом `[Начало]`, конец — узлом `[Конец]`.\n"
-        "- Для ветвлений применяй ромбовидные узлы.\n"
+        "- Для ветвлений, то есть условии, применяй ромбовидные узлы, фигура - ромб.\n"
         "- Для всех стрелок указывай текст условия или действия.\n\n"
         "Ответ (ТОЛЬКО Mermaid):"
     )
 
 
-
+def get_student_flowchart_prompt():
+    return (
+        "Ты — умный университетский ассистент для студентов Университета AITU. "
+        "На основании приведённого контекста и вопроса составь понятную и точную блок‑схему в формате Mermaid. "
+        "Убедись, что итоговый синтаксис абсолютно корректен, без обёрток и лишнего текста.\n\n"
+        "Контекст:\n{context}\n\n"
+        "Вопрос: {question}\n\n"
+       "Требования:\n"
+        "- Выводи исключительно код Mermaid, начиная с ключевого слова `flowchart`.\n"
+        "- Не добавляй никакого описательного текста и не оборачивай код в разметку (```), только чистый Mermaid.\n"
+        "- Используй направление `TD` (сверху вниз) или `LR` (слева направо) в зависимости от структуры алгоритма.\n"
+        "- Обозначь начало узлом `[Начало]`, конец — узлом `[Конец]`.\n"
+        "- Для ветвлений, то есть условии, применяй ромбовидные узлы, фигура - ромб.\n"
+        "- Для всех стрелок указывай текст условия или действия.\n\n"
+        "Ответ (ТОЛЬКО Mermaid):"
+    )
 
 # ============================================================
 # Инициализация LLM и цепочек QA для учителей и студентов
@@ -322,7 +338,6 @@ from fastapi.staticfiles import StaticFiles
 
 app.mount("/static", StaticFiles(directory="static", html=True), name="static")
 
-
 # Эндпойнт для вывода всех маршрутов приложения
 @app.get("/api/endpoints")
 def list_endpoints():
@@ -352,31 +367,70 @@ def student_chat(payload: ChatRequest):
 
 import re
 
+
+
 @app.post("/api/teacher/flowchart")
 def teacher_flowchart(payload: ChatRequest):
+    # 1) pull context
     relevant_docs = teacher_vectorstore.similarity_search(payload.query, k=3)
-    context = "\n".join([doc.page_content for doc in relevant_docs])
+    context = "\n".join(doc.page_content for doc in relevant_docs)
 
+    # 2) build human‐readable sources list
+    sources = extract_sources_list(relevant_docs)
+
+    # 3) invoke the LLM prompt → Mermaid code
     prompt = PromptTemplate(
         template=get_teacher_flowchart_prompt(),
         input_variables=["context", "question"]
     )
-
     chain = prompt | llm
     chain_response = chain.invoke({"context": context, "question": payload.query})
+    mermaid_code = chain_response.content.strip()
 
-    try:
-        json_text = re.search(r'\{.*\}', chain_response.content, re.DOTALL).group()
-        flowchart_data = json.loads(json_text)
-    except Exception as e:
-        print("[DEBUG] Failed JSON extraction:", chain_response.content)
-        raise HTTPException(status_code=500, detail="LLM ответил невалидным JSON")
+    # debug logs (optional)
+    print("[DEBUG] Mermaid code:\n", mermaid_code)
+    print("[DEBUG] Sources:", sources)
 
-    # Debug 
-    print("[DEBUG] GPT raw content:", chain_response.content)
-    print("[DEBUG] Final flowchart_data:", flowchart_data)
+    # 4) return both in JSON
+    return JSONResponse({
+        "mermaid": mermaid_code,
+        "sources": sources
+    })
 
-    return flowchart_data
+
+
+
+@app.post("/api/student/flowchart")
+def student_flowchart(payload: ChatRequest):
+    # 1) context from student vectorstore
+    relevant_docs = student_vectorstore.similarity_search(payload.query, k=3)
+    context = "\n".join(doc.page_content for doc in relevant_docs)
+
+    # 2) human‑readable sources
+    sources = extract_sources_list(relevant_docs)
+
+    # 3) invoke student prompt
+    prompt = PromptTemplate(
+        template=get_student_flowchart_prompt(),
+        input_variables=["context", "question"]
+    )
+    chain = prompt | llm
+    chain_response = chain.invoke({"context": context, "question": payload.query})
+    mermaid_code = chain_response.content.strip()
+
+    # debug
+    print("[DEBUG][STUDENT] Mermaid code:\n", mermaid_code)
+    print("[DEBUG][STUDENT] Sources:", sources)
+
+    # 4) return JSON envelope
+    return JSONResponse({
+        "mermaid": mermaid_code,
+        "sources": sources
+    })
+
+
+
+
 
 
 # история чата
