@@ -135,7 +135,9 @@ def get_teacher_prompt_template():
         "Будь дружелюбным, действуй как надежный друг и ассистент, старайся найти ответ на любой вопрос. Даже очень сложный. "
         "Отвечай на том языке, на котором запрос. Если человек пишет на русском, то ответ должен быть на русском. Если человек пишет на английском, то и ответ должен быть на английском соответственно."
         "Если в базе данных недостаточно информации, сообщяй, что можно обратиться в офис регистратора.\n\n"
-        "Контекст:\n{context}\n\n"
+        "Предыдущее сообщение, обязательно держи это в памяти. Помни все, что обсуждали и спрашивали (история чата):\n"
++        "{chat_history}\n\n"
+        "Контекст документов:\n{context}\n\n"
         "Вопрос: {question}\n\n"
         "Ответ:"
     )
@@ -151,6 +153,8 @@ def get_student_prompt_template():
         "Будь дружелюбным, отзывчивым и всегда старайся помочь студентам с их университетскими запросами. "
         "Отвечай на том языке, на котором запрос. Если человек пишет на русском, то ответ должен быть на русском. Если человек пишет на английском, то и ответ должен быть на английском соответственно."
         "Если в базе данных недостаточно информации, сообщи, что можно обратиться в офис поддержки.\n\n"
+        "Предыдущее сообщение, обязательно держи это в памяти. Помни все, что обсуждали и спрашивали (история чата):\n"
++       "{chat_history}\n\n"
         "Контекст:\n{context}\n\n"
         "Вопрос: {question}\n\n"
         "Ответ:"
@@ -197,11 +201,11 @@ def get_student_flowchart_prompt():
 llm = ChatOpenAI(openai_api_key=OPENAI_API_KEY, temperature=0, model_name="gpt-4o-mini")
 teacher_prompt = PromptTemplate(
     template=get_teacher_prompt_template(),
-    input_variables=["context", "question"]
+    input_variables=["chat_history", "context", "question"]
 )
 student_prompt = PromptTemplate(
     template=get_student_prompt_template(),
-    input_variables=["context", "question"]
+    input_variables=["chat_history", "context", "question"]
 )
 
 teacher_vectorstore = load_or_rebuild_vectorstore(DATA_FOLDER_TEACHERS, INDEXES_FOLDER_TEACHERS)
@@ -427,6 +431,7 @@ def student_flowchart(payload: ChatRequest):
         "mermaid": mermaid_code,
         "sources": sources
     })
+
 
 
 
