@@ -2,6 +2,7 @@ import os
 import json
 import hashlib
 from typing import List, Optional, Dict, Any
+from datetime import datetime
 from fastapi import HTTPException
 from langchain.chains import LLMChain
 from fastapi.responses import PlainTextResponse
@@ -128,7 +129,7 @@ def get_teacher_prompt_template():
         "Ты — умный университетский ассистент для преподавателей и для сотрудников Университета AITU. Тебя зовут AITU - Connect. "
         "Используй следующий полученный контекст для ответа на вопрос. "
         "Сначала разберись с заданным вопросом, попытайся его полностью понять, разберись с контекстом. Подумай перед тем как ответить"
-        
+        "Отвечай на том языке, на котором запрос."
         "где перечисляй имена файлов с которых взял информацию и, если возможно, номера страниц. "
         "Отвечай емко, четко и полно, в несколько абзацев, разбивая ответ на логически структурированные абзацы, "
         "а при необходимости используй нумерованные списки или bullet points для наглядности. "
@@ -146,7 +147,7 @@ def get_student_prompt_template():
     return (
         "Ты — умный университетский ассистент для студентов Университета AITU. "
         "Тебя зовут AITU - Connect. "
-        "Используй следующий предоставленный контекст для ответа на вопрос. "
+        "Отвечай на том языке, на котором запрос. "
         "Сначала внимательно изучи вопрос, разберись в его сути и контексте. Подумай перед тем как ответить"
         "Отвечай емко, четко и полно, в несколько абзацев, разбивая ответ на логически структурированные абзацы, "
         "а при необходимости используй нумерованные списки или bullet points для наглядности. "
@@ -245,8 +246,19 @@ class ChatAssistant:
             if sources:
                 sources_text = "\n\nSources:\n" + "\n".join(sources)
                 answer += sources_text
-        self.histories[session_id].append(("user", user_query))
-        self.histories[session_id].append(("assistant", answer))
+        #self.histories[session_id].append(("user", user_query))
+        #self.histories[session_id].append(("assistant", answer))
+        self.histories[session_id].append({
+            "role": "user",
+            "content": user_query,
+            "time": datetime.now().strftime("%I:%M %p")
+        })
+        # record assistant message with hh:mm AM/PM
+        self.histories[session_id].append({
+            "role": "assistant",
+            "content": answer,
+            "time": datetime.now().strftime("%I:%M %p")
+        })
         return answer, source_docs
     def _convert_history(self, session_id: str):
         history = self.histories.get(session_id, [])
@@ -375,14 +387,14 @@ import re
 
 @app.post("/api/teacher/flowchart")
 def teacher_flowchart(payload: ChatRequest):
-    # 1) pull context
+    # context
     relevant_docs = teacher_vectorstore.similarity_search(payload.query, k=3)
     context = "\n".join(doc.page_content for doc in relevant_docs)
 
-    # 2) build human‐readable sources list
+    # sources 
     sources = extract_sources_list(relevant_docs)
 
-    # 3) invoke the LLM prompt → Mermaid code
+    # LLM prompt → Mermaid code
     prompt = PromptTemplate(
         template=get_teacher_flowchart_prompt(),
         input_variables=["context", "question"]
@@ -391,11 +403,11 @@ def teacher_flowchart(payload: ChatRequest):
     chain_response = chain.invoke({"context": context, "question": payload.query})
     mermaid_code = chain_response.content.strip()
 
-    # debug logs (optional)
+    # debug
     print("[DEBUG] Mermaid code:\n", mermaid_code)
     print("[DEBUG] Sources:", sources)
 
-    # 4) return both in JSON
+    # JSON
     return JSONResponse({
         "mermaid": mermaid_code,
         "sources": sources
@@ -406,14 +418,14 @@ def teacher_flowchart(payload: ChatRequest):
 
 @app.post("/api/student/flowchart")
 def student_flowchart(payload: ChatRequest):
-    # 1) context from student vectorstore
+    # context vectorstore
     relevant_docs = student_vectorstore.similarity_search(payload.query, k=3)
     context = "\n".join(doc.page_content for doc in relevant_docs)
 
-    # 2) human‑readable sources
+    # sources
     sources = extract_sources_list(relevant_docs)
 
-    # 3) invoke student prompt
+    # student prompt
     prompt = PromptTemplate(
         template=get_student_flowchart_prompt(),
         input_variables=["context", "question"]
@@ -426,14 +438,11 @@ def student_flowchart(payload: ChatRequest):
     print("[DEBUG][STUDENT] Mermaid code:\n", mermaid_code)
     print("[DEBUG][STUDENT] Sources:", sources)
 
-    # 4) return JSON envelope
+    # JSON envelope
     return JSONResponse({
         "mermaid": mermaid_code,
         "sources": sources
     })
-
-
-
 
 
 
@@ -446,24 +455,31 @@ def clear_chat(role: str, session_id: str = "default"):
         teacher_assistant.clear_history(session_id)
     elif role.lower() == "student":
         student_assistant.clear_history(session_id)
+    else:
+        raise HTTPException(status_code=404, detail="Role not found")
     return {"message": "История чата очищена"}
 
 @app.get("/api/{role}/chat/history", response_model=ChatHistoryResponse)
 def get_chat_history(role: str, session_id: str = "default"):
-    #dict
     if role.lower() == "teacher":
         hist = teacher_assistant.histories.get(session_id, [])
     elif role.lower() == "student":
         hist = student_assistant.histories.get(session_id, [])
     else:
         raise HTTPException(status_code=404, detail="Role not found")
-        # integer ID (index)
+
+    # timestamps
     conversation = [
-        {"id": idx, "role": r, "content": c}
-        for idx, (r, c) in enumerate(hist)
+        {
+            "id": idx,
+            "role": entry["role"],
+            "content": entry["content"],
+            "time": entry.get("time")
+        }
+        for idx, entry in enumerate(hist)
     ]
-    # conversation = [{"role": r, "content": c} for r, c in hist]
     return {"session_id": session_id, "history": conversation}
+
 @app.delete("/api/{role}/chat/history", response_model=ChatDeleteResponse)
 def delete_chat_message(
     role: str,
@@ -480,7 +496,6 @@ def delete_chat_message(
     if message_id is None or message_id < 0 or message_id >= len(hist):
         raise HTTPException(status_code=400, detail="Invalid message_id")
 
-    # удаляет
     hist.pop(message_id)
     return {"message": f"Deleted message {message_id} from session {session_id}"}
 
