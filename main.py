@@ -11,7 +11,7 @@ from fastapi import FastAPI, File, UploadFile, Form
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
-# Импортируем модули проекта
+# модули проекта
 from document_manager import DocumentManager
 from document_processor import process_document_folder
 from vector_storage import create_faiss_index, load_faiss_index, save_faiss_index, add_chunks_to_index
@@ -188,7 +188,7 @@ def get_student_flowchart_prompt():
         "Убедись, что итоговый синтаксис абсолютно корректен, без обёрток и лишнего текста.\n\n"
         "Контекст:\n{context}\n\n"
         "Вопрос: {question}\n\n"
-       "Требования:\n"
+        "Требования:\n"
         "- Выводи исключительно код Mermaid, начиная с ключевого слова `flowchart`.\n"
         "- Не добавляй никакого описательного текста и не оборачивай код в разметку (```), только чистый Mermaid.\n"
         "- Используй направление `TD` (сверху вниз) или `LR` (слева направо) в зависимости от структуры алгоритма.\n"
@@ -234,34 +234,48 @@ student_qa_chain = ConversationalRetrievalChain.from_llm(
 class ChatAssistant:
     def __init__(self, qa_chain):
         self.qa = qa_chain
-        self.histories = {}  # {session_id: list of (role, content)}
+        self.histories = {}  # {session_id: list of dicts}
+
     def get_answer(self, user_query: str, session_id: str = "default"):
         if session_id not in self.histories:
             self.histories[session_id] = []
+
+        # 1) rewrite with history for follow‑ups
         chain_history = self._convert_history(session_id)
-        result = self.qa({"question": user_query, "chat_history": chain_history})
+
+        # 2) call the chain
+        result = self.qa({
+            "question": user_query,
+            "chat_history": chain_history
+        })
         answer = result.get("answer", "")
         source_docs = result.get("source_documents", [])
-        # Добавляем в конец ответа секцию "Sources:" с информацией об источниках
-        if source_docs:
-            sources = self._extract_sources(source_docs)
-            if sources:
-                sources_text = "\n\nSources:\n" + "\n".join(sources)
-                answer += sources_text
+        sources = self._extract_sources(source_docs)
+        # if source_docs:
+        #     sources = self._extract_sources(source_docs)
+        #     if sources:
+        #         sources_text = "\n\nSources:\n" + "\n".join(sources)
+        #         answer += sources_text
+     
         #self.histories[session_id].append(("user", user_query))
         #self.histories[session_id].append(("assistant", answer))
+        # 3) record into history with timestamp
+
         self.histories[session_id].append({
             "role": "user",
             "content": user_query,
             "time": datetime.now().strftime("%I:%M %p")
         })
-        # record assistant message with hh:mm AM/PM
         self.histories[session_id].append({
             "role": "assistant",
             "content": answer,
-            "time": datetime.now().strftime("%I:%M %p")
+            "time": datetime.now().strftime("%I:%M %p"),
+            "sources": sources,
         })
+
+        # 4) return pure answer + docs (your endpoint will convert docs→sources list)
         return answer, source_docs
+
     def _convert_history(self, session_id: str):
         history = self.histories.get(session_id, [])
         pairs = []
