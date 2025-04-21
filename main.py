@@ -331,28 +331,14 @@ class ChatAssistant:
                 last_user = None
         return pairs
     def _extract_sources(self, source_docs) -> List[str]:
-        sources = {}
+        seen = set()
+        sources = []
         for doc in source_docs:
-            metadata = doc.metadata
-            if "file_name" not in metadata:
-                continue
-            file_name = metadata.get("file_name")
-            if metadata.get("file_type") == "pdf" and "page_number" in metadata:
-                if file_name not in sources:
-                    sources[file_name] = []
-                if metadata["page_number"] not in sources[file_name]:
-                    sources[file_name].append(metadata["page_number"])
-            else:
-                if file_name not in sources:
-                    sources[file_name] = []
-        formatted_sources = []
-        for file_name, pages in sources.items():
-            if pages:
-                pages.sort()
-                formatted_sources.append(f"- {file_name} (Page {', '.join(str(p) for p in pages)})")
-            else:
-                formatted_sources.append(f"- {file_name}")
-        return formatted_sources
+            file_name = doc.metadata.get("file_name")
+            if file_name and file_name not in seen:
+                seen.add(file_name)
+                sources.append(file_name)
+        return sources
     def clear_history(self, session_id: str = "default"):
         self.histories[session_id] = []
 
@@ -364,28 +350,14 @@ student_assistant = ChatAssistant(student_qa_chain)
 # Утилита для извлечения списка источников (если нужно отдельно)
 # ============================================================
 def extract_sources_list(source_docs) -> List[str]:
-    sources = {}
+    seen = set()
+    sources = []
     for doc in source_docs:
-        metadata = doc.metadata
-        if "file_name" not in metadata:
-            continue
-        file_name = metadata.get("file_name")
-        if metadata.get("file_type") == "pdf" and "page_number" in metadata:
-            if file_name not in sources:
-                sources[file_name] = []
-            if metadata["page_number"] not in sources[file_name]:
-                sources[file_name].append(metadata["page_number"])
-        else:
-            if file_name not in sources:
-                sources[file_name] = []
-    formatted_sources = []
-    for file_name, pages in sources.items():
-        if pages:
-            pages.sort()
-            formatted_sources.append(f"{file_name} (pages: {', '.join(str(p) for p in pages)})")
-        else:
-            formatted_sources.append(file_name)
-    return formatted_sources
+        file_name = doc.metadata.get("file_name")
+        if file_name and file_name not in seen:
+            seen.add(file_name)
+            sources.append(file_name)
+    return sources
 
 # ============================================================
 # Инициализация менеджеров документов для учителей и студентов
