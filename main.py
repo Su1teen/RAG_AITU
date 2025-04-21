@@ -66,40 +66,68 @@ class ChatDeleteResponse(BaseModel):
 # Функция загрузки/перестроения векторного хранилища
 # (упрощённая версия с контрольной меткой (fingerprint))
 # ============================================================
-def load_or_rebuild_vectorstore(data_folder: str, indexes_folder: str) -> LC_FAISS:
+def load_or_rebuild_vectorstore(data_folder: str, indexes_folder: str, call_id: str = "") -> LC_FAISS:
+    # Create folders if they don't exist
+    os.makedirs(indexes_folder, exist_ok=True)
     fingerprint_file = os.path.join(indexes_folder, "index_fingerprint.json")
+    index_path = os.path.join(indexes_folder, "index.faiss")
+    metadata_path = os.path.join(indexes_folder, "document_metadata.json")
+
+    # Calculate current fingerprint
     current_fingerprint = {}
     for root, _, files in os.walk(data_folder):
         for file in files:
             if file.lower().endswith(('.docx', '.pdf', '.txt')):
                 path = os.path.join(root, file)
                 current_fingerprint[path] = os.path.getmtime(path)
+                #print(f"[DEBUG] Fingerprint includes: {path}")
     fingerprint_hash = hashlib.md5(json.dumps(current_fingerprint, sort_keys=True).encode()).hexdigest()
-    
+
+    # Read previous fingerprint
     previous_fingerprint = None
     if os.path.exists(fingerprint_file):
         try:
             with open(fingerprint_file, 'r') as f:
                 previous_fingerprint = json.load(f)
         except (json.JSONDecodeError, IOError) as e:
-            print(f"[WARNING] Could not read fingerprint file: {e}")
-    
-    index_path = os.path.join(indexes_folder, "index.faiss")
-    metadata_path = os.path.join(indexes_folder, "metadata.json")
+            print(f"[ERROR] Could not read fingerprint file: {e}")
+
     print(f"[DEBUG] Current fingerprint: {fingerprint_hash}")
     print(f"[DEBUG] Previous fingerprint: {previous_fingerprint}")
-    
+
+    # Check if we can load existing index
     if (os.path.exists(index_path) and os.path.exists(metadata_path) and previous_fingerprint == fingerprint_hash):
-    #if os.path.exists(index_path) and previous_fingerprint == fingerprint_hash:
+        print(f"[DEBUG] Index file exists: {os.path.exists(index_path)}")
+        print(f"[DEBUG] Metadata file exists: {os.path.exists(metadata_path)}")
+
         try:
-            vectorstore = LC_FAISS.load_local(indexes_folder, embeddings)
-            print("[INFO] Loaded existing vectorstore.")
-            return vectorstore
+            # Here's the fix - wrap this in a more specific try/except block
+            # that catches only errors we expect from FAISS loading
+            try:
+                vectorstore = LC_FAISS.load_local(indexes_folder, embeddings, allow_dangerous_deserialization=True)
+                print(f"[INFO] Loaded existing vectorstore with {vectorstore.index.ntotal} vectors")
+                return vectorstore
+            except (AttributeError, ValueError, FileNotFoundError) as e:
+                print(f"[ERROR] Failed to load existing vectorstore (specific error): {e}")
+                # Delete corrupted files
+                if os.path.exists(index_path):
+                    print(f"[DEBUG] Removing corrupted index: {index_path}")
+                    os.remove(index_path)
+                if os.path.exists(metadata_path):
+                    print(f"[DEBUG] Removing corrupted metadata: {metadata_path}")
+                    os.remove(metadata_path)
         except Exception as e:
-            print(f"[INFO] Failed to load existing vectorstore: {e}")
-    
+            print(f"[ERROR] Unexpected error loading vectorstore: {e}")
+            # Delete corrupted files
+            if os.path.exists(index_path):
+                print(f"[DEBUG] Removing corrupted index: {index_path}")
+                os.remove(index_path)
+            if os.path.exists(metadata_path):
+                print(f"[DEBUG] Removing corrupted metadata: {metadata_path}")
+                os.remove(metadata_path)
+
+    # If loading failed or fingerprints don't match, rebuild index
     print("[INFO] Building/rebuilding index from documents...")
-    # Создаём чанки из документов
     chunks = process_document_folder(
         data_folder,
         min_words_per_page=100,
@@ -107,20 +135,32 @@ def load_or_rebuild_vectorstore(data_folder: str, indexes_folder: str) -> LC_FAI
         min_chunk_size=256,
         overlap_size=150
     )
+    print(f"[DEBUG] Generated {len(chunks)} chunks")
+
     if not chunks:
-        vectorstore = LC_FAISS.from_documents([Document(page_content="Empty index", metadata={})], embeddings)
-        vectorstore.save_local(indexes_folder)
+        try:
+            vectorstore = LC_FAISS.from_documents([Document(page_content="Empty index", metadata={})], embeddings)
+            vectorstore.save_local(indexes_folder)
+            with open(fingerprint_file, 'w') as f:
+                json.dump(fingerprint_hash, f)
+            print("[WARNING] No chunks generated, created empty index")
+        except Exception as e:
+            print(f"[ERROR] Failed to create empty vectorstore: {e}")
+            raise
         return vectorstore
-    
-    # Преобразуем чанки в объекты Document
-    docs = [Document(page_content=ch["text"], metadata=ch["metadata"]) for ch in chunks]
-    vectorstore = LC_FAISS.from_documents(docs, embeddings)
-    vectorstore.save_local(indexes_folder)
-    
-    with open(fingerprint_file, 'w') as f:
-        json.dump(fingerprint_hash, f)
-    
+
+    try:
+        docs = [Document(page_content=ch["text"], metadata=ch["metadata"]) for ch in chunks]
+        vectorstore = LC_FAISS.from_documents(docs, embeddings)
+        vectorstore.save_local(indexes_folder)
+        with open(fingerprint_file, 'w') as f:
+            json.dump(fingerprint_hash, f)
+        print(f"[INFO] Created new vectorstore with {vectorstore.index.ntotal} vectors")
+    except Exception as e:
+        print(f"[ERROR] Failed to create vectorstore: {e}")
+        raise
     return vectorstore
+
 
 # ============================================================
 # Шаблоны (prompt) для цепочек QA (отдельные для учителей и студентов)
@@ -291,14 +331,28 @@ class ChatAssistant:
                 last_user = None
         return pairs
     def _extract_sources(self, source_docs) -> List[str]:
-        seen = set()
-        sources = []
+        sources = {}
         for doc in source_docs:
-            file_name = doc.metadata.get("file_name")
-            if file_name and file_name not in seen:
-                seen.add(file_name)
-                sources.append(file_name)
-        return sources
+            metadata = doc.metadata
+            if "file_name" not in metadata:
+                continue
+            file_name = metadata.get("file_name")
+            if metadata.get("file_type") == "pdf" and "page_number" in metadata:
+                if file_name not in sources:
+                    sources[file_name] = []
+                if metadata["page_number"] not in sources[file_name]:
+                    sources[file_name].append(metadata["page_number"])
+            else:
+                if file_name not in sources:
+                    sources[file_name] = []
+        formatted_sources = []
+        for file_name, pages in sources.items():
+            if pages:
+                pages.sort()
+                formatted_sources.append(f"- {file_name} (Page {', '.join(str(p) for p in pages)})")
+            else:
+                formatted_sources.append(f"- {file_name}")
+        return formatted_sources
     def clear_history(self, session_id: str = "default"):
         self.histories[session_id] = []
 
@@ -310,14 +364,28 @@ student_assistant = ChatAssistant(student_qa_chain)
 # Утилита для извлечения списка источников (если нужно отдельно)
 # ============================================================
 def extract_sources_list(source_docs) -> List[str]:
-    seen = set()
-    sources = []
+    sources = {}
     for doc in source_docs:
-        file_name = doc.metadata.get("file_name")
-        if file_name and file_name not in seen:
-            seen.add(file_name)
-            sources.append(file_name)
-    return sources
+        metadata = doc.metadata
+        if "file_name" not in metadata:
+            continue
+        file_name = metadata.get("file_name")
+        if metadata.get("file_type") == "pdf" and "page_number" in metadata:
+            if file_name not in sources:
+                sources[file_name] = []
+            if metadata["page_number"] not in sources[file_name]:
+                sources[file_name].append(metadata["page_number"])
+        else:
+            if file_name not in sources:
+                sources[file_name] = []
+    formatted_sources = []
+    for file_name, pages in sources.items():
+        if pages:
+            pages.sort()
+            formatted_sources.append(f"{file_name} (pages: {', '.join(str(p) for p in pages)})")
+        else:
+            formatted_sources.append(file_name)
+    return formatted_sources
 
 # ============================================================
 # Инициализация менеджеров документов для учителей и студентов
@@ -465,7 +533,7 @@ def get_chat_history(role: str, session_id: str = "default"):
             "role": entry["role"],
             "content": entry["content"],
             "time": entry.get("time"),
-            "sources": entry.get["sources", []]
+            "sources": entry.get("sources", [])
         }
         for idx, entry in enumerate(hist)
     ]
@@ -504,10 +572,10 @@ def list_student_docs():
 
 @app.post("/api/teacher/docs/upload")
 def upload_teacher_doc(
-    file: UploadFile = File(...),
-    title: str = Form(""),
-    description: str = Form(""),
-    tags: str = Form("")
+        file: UploadFile = File(...),
+        title: str = Form(""),
+        description: str = Form(""),
+        tags: str = Form("")
 ):
     temp_dir = "temp"
     os.makedirs(temp_dir, exist_ok=True)
@@ -521,10 +589,15 @@ def upload_teacher_doc(
         description=description,
         tags=tags_list
     )
-    global teacher_vectorstore
- 
+
+    # Update global vectorstore
+    global teacher_vectorstore, teacher_qa_chain
+
+    # Rebuild the vectorstore
     teacher_vectorstore = load_or_rebuild_vectorstore(DATA_FOLDER_TEACHERS, INDEXES_FOLDER_TEACHERS)
-    
+
+    # Update the QA chain to use the new vectorstore retriever
+    teacher_qa_chain.retriever = teacher_vectorstore.as_retriever(search_kwargs={"k": 3})
 
     return {
         "message": "Документ успешно загружен",
@@ -533,12 +606,13 @@ def upload_teacher_doc(
         "version": doc_info["version"]
     }
 
+
 @app.post("/api/student/docs/upload")
 def upload_student_doc(
-    file: UploadFile = File(...),
-    title: str = Form(""),
-    description: str = Form(""),
-    tags: str = Form("")
+        file: UploadFile = File(...),
+        title: str = Form(""),
+        description: str = Form(""),
+        tags: str = Form("")
 ):
     temp_dir = "temp"
     os.makedirs(temp_dir, exist_ok=True)
@@ -552,8 +626,14 @@ def upload_student_doc(
         description=description,
         tags=tags_list
     )
-    global student_vectorstore
+
+    # Update global vectorstore and QA chain
+    global student_vectorstore, student_qa_chain
     student_vectorstore = load_or_rebuild_vectorstore(DATA_FOLDER_STUDENTS, INDEXES_FOLDER_STUDENTS)
+
+    # Update the QA chain to use the new vectorstore retriever
+    student_qa_chain.retriever = student_vectorstore.as_retriever(search_kwargs={"k": 3})
+
     return {
         "message": "Документ успешно загружен",
         "doc_id": doc_info["id"],
@@ -562,23 +642,35 @@ def upload_student_doc(
     }
 
 @app.post("/refresh/staff")
-def refresh_staff_index():
-    """
-    Принудительно пересобрать индекс для сотрудников (teacher/staff).
-    """
-    global teacher_vectorstore
-    teacher_vectorstore = load_or_rebuild_vectorstore(DATA_FOLDER_TEACHERS, INDEXES_FOLDER_TEACHERS)
-    return {"message": "Индекс для сотрудников (Teacher) был успешно пересобран"}
+async def refresh_staff_index():
+    try:
+        global teacher_vectorstore, teacher_qa_chain
+        print(f"[DEBUG] Starting refresh for staff index")
+        teacher_vectorstore = load_or_rebuild_vectorstore(DATA_FOLDER_TEACHERS, INDEXES_FOLDER_TEACHERS,
+                                                          call_id="refresh_staff")
+
+        # Update the QA chain with the new retriever
+        teacher_qa_chain.retriever = teacher_vectorstore.as_retriever(search_kwargs={"k": 3})
+
+        print(f"[DEBUG] Rebuilt teacher_vectorstore with {teacher_vectorstore.index.ntotal} vectors")
+        return {"message": "Индекс для сотрудников (Teacher) был успешно пересобран"}
+    except Exception as e:
+        print(f"[ERROR] Failed to refresh staff index: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.post("/refresh/students")
 def refresh_students_index():
     """
     Принудительно пересобрать индекс для студентов.
     """
-    global student_vectorstore
+    global student_vectorstore, student_qa_chain
     student_vectorstore = load_or_rebuild_vectorstore(DATA_FOLDER_STUDENTS, INDEXES_FOLDER_STUDENTS)
-    return {"message": "Индекс для студентов был успешно пересобран"}
 
+    # Update the QA chain with the new retriever
+    student_qa_chain.retriever = student_vectorstore.as_retriever(search_kwargs={"k": 3})
+
+    return {"message": "Индекс для студентов был успешно пересобран"}
 
 
 if __name__ == "__main__":
