@@ -11,6 +11,7 @@ numpy
 pdfplumber
 python-docx
 pdf2image
+PyPDF2
 pytesseract
 chardet
 tqdm
