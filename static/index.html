@@ -152,26 +152,21 @@
     <button onclick="listDocs()">List Documents</button>
     <div class="output" id="docs-output"></div>
     <hr>
-    <h3>Upload a Document</h3>
-    <form id="upload-form">
-      <label for="upload-role-select">Select Role:</label>
-      <select id="upload-role-select">
-        <option value="teacher">Teacher</option>
-        <option value="student">Student</option>
-      </select>
-      <br /><br />
-      <input type="file" id="upload-file" required>
-      <br /><br />
-      <input type="text" id="upload-title" placeholder="Title">
-      <br /><br />
-      <input type="text" id="upload-description" placeholder="Description">
-      <br /><br />
-      <input type="text" id="upload-tags" placeholder="Tags (comma separated)">
-      <br /><br />
-      <button type="submit">Upload Document</button>
-    </form>
+    <h3>Upload a document</h3>
+    <label>Role:</label>
+    <select id="upload-role">
+      <option value="teacher">Teacher</option>
+      <option value="student">Student</option>
+    </select><br/><br/>
+    
+    <input type="file" id="upload-file"><br/><br/>
+    
+    <button id="btn-check">Check Similarity</button>
+    <button id="btn-upload" style="display:none">Upload & Rebuild</button>
+    <button id="btn-replace" style="display:none">Replace & Rebuild</button>
+    
     <div class="output" id="upload-output"></div>
-  </div>
+    
 
   <!-- Endpoints List Section -->
   <div class="container" id="endpoints-section">
@@ -271,6 +266,11 @@
 
 
 
+
+
+
+
+
     async function listDocs() {
       const role = document.getElementById("docs-role-select").value;
       const endpoint = role === "teacher" ? "/api/teacher/docs" : "/api/student/docs";
@@ -279,27 +279,142 @@
       document.getElementById("docs-output").textContent = JSON.stringify(data, null, 2);
     }
 
-    document.getElementById("upload-form").addEventListener("submit", async (event) => {
-      event.preventDefault();
-      const role = document.getElementById("upload-role-select").value;
-      const endpoint = role === "teacher" ? "/api/teacher/docs/upload" : "/api/student/docs/upload";
-      const fileInput = document.getElementById("upload-file");
-      const title = document.getElementById("upload-title").value;
-      const description = document.getElementById("upload-description").value;
-      const tags = document.getElementById("upload-tags").value;
 
+
+    const checkBtn   = document.getElementById("btn-check");
+    const uploadBtn  = document.getElementById("btn-upload");
+    const replaceBtn = document.getElementById("btn-replace");
+    const outDiv     = document.getElementById("upload-output");
+
+    let lastFile = null, lastRole = null, candidates = [];
+
+    checkBtn.onclick = async () => {
+      outDiv.textContent = "Checking…";
+      lastFile = document.getElementById("upload-file").files[0];
+      lastRole = document.getElementById("upload-role").value;
+      if (!lastFile) return outDiv.textContent="Select a file first";
+
+      const fd = new FormData();
+      fd.append("file", lastFile);
+      const resp = await fetch(`${baseURL}/api/${lastRole}/docs/check_similarity`,
+                              { method:"POST", body:fd });
+      const {possible_duplicates} = await resp.json();
+
+      if (possible_duplicates.length) {
+        candidates = possible_duplicates;
+        outDiv.innerHTML =
+          `<b>Possible duplicates:</b><br>` +
+          possible_duplicates.map(d =>
+            `• ${d.file} ( ${d.similarity}% )`
+          ).join("<br>") +
+          `<br><br>`;
+        replaceBtn.style.display = "inline-block";
+      } else {
+        outDiv.textContent = "No duplicates found. Ready to upload.";
+      }
+
+      uploadBtn.style.display = "inline-block";
+    };
+
+    uploadBtn.onclick = () => {
+      doUpload(/* no replace */);
+    };
+
+    replaceBtn.onclick = () => {
+      // if there are multiple, you could let user pick one.
+      // for simplicity take the first:
+      doUpload(candidates[0].file);
+    };
+
+    async function doUpload(replaceId) {
+      outDiv.textContent = "Uploading & rebuilding index…";
+      const fd = new FormData();
+      fd.append("file", lastFile);
+      if (replaceId) fd.append("replace_doc_id", replaceId);
+
+      const ep = lastRole==="teacher" ? "/api/teacher/docs/upload"
+                                      : "/api/student/docs/upload";
+
+      const resp = await fetch(baseURL + ep, { method:"POST", body:fd });
+      const data = await resp.json();
+      outDiv.textContent = `${data.file_action || ""}\n${data.message}`;
+      // hide buttons again
+      uploadBtn.style.display = replaceBtn.style.display = "none";
+    }
+
+
+
+
+
+
+
+    
+
+
+
+
+    document.getElementById("refresh-btn").addEventListener("click", async () => {
+    const role = document.getElementById("refresh-role").value;
+    const ep   = role === "teacher" ? "/refresh/staff" : "/refresh/students";
+    const file = document.getElementById("refresh-file");
+    const rid  = document.getElementById("replace-doc-id").value;
+
+    if (!file.files.length) return alert("Select a file first.");
+
+    const form = new FormData();
+    form.append("file", file.files[0]);
+    if (rid) form.append("replace_doc_id", rid);
+
+    document.getElementById("refresh-output").textContent = "Processing…";
+    try {
+      const res = await fetch(baseURL + ep, { method: "POST", body: form });
+      const data = await res.json();
+      document.getElementById("refresh-output").textContent = JSON.stringify(data, null, 2);
+    } catch (e) {
+      document.getElementById("refresh-output").textContent = "Error: " + e;
+    }
+    });
+
+    document.getElementById("check-similarity-btn").addEventListener("click", async () => {
+      const role = document.getElementById("upload-role-select").value;
+      const endpoint = role === "teacher"
+        ? "/api/teacher/docs/check_similarity"
+        : "/api/student/docs/check_similarity";
+      const fileInput = document.getElementById("upload-file");
+      if (!fileInput.files.length) {
+        document.getElementById("similarity-output").textContent =
+          "Please select a file first.";
+        return;
+      }
       const formData = new FormData();
       formData.append("file", fileInput.files[0]);
-      formData.append("title", title);
-      formData.append("description", description);
-      formData.append("tags", tags);
-
-      const responseData = await fetch(baseURL + endpoint, {
+      const response = await fetch(baseURL + endpoint, {
         method: "POST",
         body: formData
       });
-      const data = await responseData.json();
-      document.getElementById("upload-output").textContent = JSON.stringify(data, null, 2);
+      const data = await response.json();
+      if (data.possible_duplicates && data.possible_duplicates.length > 0) {
+        document.getElementById("similarity-output").innerHTML =
+          `<b>Possible duplicates found:</b><br>` +
+          data.possible_duplicates
+              .map(d => `File: <b>${d.file}</b>, Similarity: <b>${d.similarity}%</b>`)
+              .join("<br>");
+      } else {
+        document.getElementById("similarity-output").textContent =
+          "No similar documents found.";
+      }
+    });
+
+
+    document.getElementById("refresh-staff-btn").addEventListener("click", async () => {
+      document.getElementById("refresh-staff-output").textContent = "Refreshing...";
+      try {
+        const response = await fetch(baseURL + "/refresh/staff", { method: "POST" });
+        const data = await response.json();
+        document.getElementById("refresh-staff-output").textContent = data.message || JSON.stringify(data);
+      } catch (err) {
+        document.getElementById("refresh-staff-output").textContent = "Error refreshing index.";
+      }
     });
 
     async function listEndpoints() {

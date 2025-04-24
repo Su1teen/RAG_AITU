@@ -10,7 +10,8 @@ from fastapi.responses import JSONResponse
 from fastapi import FastAPI, File, UploadFile, Form
 from pydantic import BaseModel
 from dotenv import load_dotenv
-
+import PyPDF2
+import numpy as np
 # модули проекта
 from document_manager import DocumentManager
 from document_processor import process_document_folder
@@ -19,12 +20,15 @@ from vector_storage import create_faiss_index, load_faiss_index, save_faiss_inde
 # Импорт компонентов LangChain и OpenAI
 from langchain_openai import ChatOpenAI
 from langchain_community.vectorstores import FAISS as LC_FAISS
+from langchain.docstore.document import Document as LCDocument
 from langchain.docstore.document import Document
 from langchain.chains.conversational_retrieval.base import ConversationalRetrievalChain
 from langchain.prompts.prompt import PromptTemplate
 from langchain.embeddings.base import Embeddings
 import warnings
 warnings.filterwarnings("ignore", message="CropBox missing from /Page, defaulting to MediaBox")
+
+from sentence_transformers import SentenceTransformer
 
 # ЗАГРУЗКА ENV
 load_dotenv()
@@ -150,7 +154,8 @@ def load_or_rebuild_vectorstore(data_folder: str, indexes_folder: str, call_id: 
         return vectorstore
 
     try:
-        docs = [Document(page_content=ch["text"], metadata=ch["metadata"]) for ch in chunks]
+       # docs = [Document(page_content=ch["text"], metadata=ch["metadata"]) for ch in chunks]
+        docs = [LCDocument(page_content=ch["text"], metadata=ch["metadata"]) for ch in chunks]
         vectorstore = LC_FAISS.from_documents(docs, embeddings)
         vectorstore.save_local(indexes_folder)
         with open(fingerprint_file, 'w') as f:
@@ -413,7 +418,7 @@ def student_chat(payload: ChatRequest):
 
 import re
 
-
+    
 
 @app.post("/api/teacher/flowchart")
 def teacher_flowchart(payload: ChatRequest):
@@ -542,108 +547,261 @@ def list_teacher_docs():
 def list_student_docs():
     return student_doc_manager.get_active_documents()
 
-@app.post("/api/teacher/docs/upload")
-def upload_teacher_doc(
-        file: UploadFile = File(...),
-        title: str = Form(""),
-        description: str = Form(""),
-        tags: str = Form("")
-):
-    temp_dir = "temp"
-    os.makedirs(temp_dir, exist_ok=True)
-    temp_filepath = os.path.join(temp_dir, file.filename)
-    with open(temp_filepath, "wb") as f:
-        f.write(file.file.read())
-    tags_list = [t.strip() for t in tags.split(",") if t.strip()]
-    doc_info = teacher_doc_manager.add_document(
-        temp_filepath,
-        title=title,
-        description=description,
-        tags=tags_list
-    )
-
-    # Update global vectorstore
-    global teacher_vectorstore, teacher_qa_chain
-
-    # Rebuild the vectorstore
-    teacher_vectorstore = load_or_rebuild_vectorstore(DATA_FOLDER_TEACHERS, INDEXES_FOLDER_TEACHERS)
-
-    # Update the QA chain to use the new vectorstore retriever
-    teacher_qa_chain.retriever = teacher_vectorstore.as_retriever(search_kwargs={"k": 3})
-
-    return {
-        "message": "Документ успешно загружен",
-        "doc_id": doc_info["id"],
-        "title": doc_info["title"],
-        "version": doc_info["version"]
-    }
-
-
-@app.post("/api/student/docs/upload")
-def upload_student_doc(
-        file: UploadFile = File(...),
-        title: str = Form(""),
-        description: str = Form(""),
-        tags: str = Form("")
-):
-    temp_dir = "temp"
-    os.makedirs(temp_dir, exist_ok=True)
-    temp_filepath = os.path.join(temp_dir, file.filename)
-    with open(temp_filepath, "wb") as f:
-        f.write(file.file.read())
-    tags_list = [t.strip() for t in tags.split(",") if t.strip()]
-    doc_info = student_doc_manager.add_document(
-        temp_filepath,
-        title=title,
-        description=description,
-        tags=tags_list
-    )
-
-    # Update global vectorstore and QA chain
-    global student_vectorstore, student_qa_chain
-    student_vectorstore = load_or_rebuild_vectorstore(DATA_FOLDER_STUDENTS, INDEXES_FOLDER_STUDENTS)
-
-    # Update the QA chain to use the new vectorstore retriever
-    student_qa_chain.retriever = student_vectorstore.as_retriever(search_kwargs={"k": 3})
-
-    return {
-        "message": "Документ успешно загружен",
-        "doc_id": doc_info["id"],
-        "title": doc_info["title"],
-        "version": doc_info["version"]
-    }
 
 @app.post("/refresh/staff")
-async def refresh_staff_index():
+async def refresh_staff_index(
+    file: UploadFile = File(None),
+    replace_doc_id: str = Form(None)
+):
     try:
         global teacher_vectorstore, teacher_qa_chain
-        print(f"[DEBUG] Starting refresh for staff index")
-        teacher_vectorstore = load_or_rebuild_vectorstore(DATA_FOLDER_TEACHERS, INDEXES_FOLDER_TEACHERS,
-                                                          call_id="refresh_staff")
 
-        # Update the QA chain with the new retriever
+        # If file provided, only replace if replace_doc_id is set
+        if file:
+            tmp_dir = "temp"
+            os.makedirs(tmp_dir, exist_ok=True)
+            tmp_path = os.path.join(tmp_dir, file.filename)
+            with open(tmp_path, "wb") as f:
+                f.write(file.file.read())
+
+            if replace_doc_id:
+                teacher_doc_manager.delete_document_by_id(replace_doc_id)
+                new_doc = teacher_doc_manager.add_document(tmp_path)
+                action = f"Replaced {replace_doc_id} → {new_doc['id']}"
+            else:
+                new_doc = teacher_doc_manager.add_document(tmp_path)
+                action = f"Added new document {new_doc['id']}"
+
+        teacher_vectorstore = load_or_rebuild_vectorstore(
+            DATA_FOLDER_TEACHERS,
+            INDEXES_FOLDER_TEACHERS,
+            call_id="refresh_staff"
+        )
         teacher_qa_chain.retriever = teacher_vectorstore.as_retriever(search_kwargs={"k": 3})
 
-        print(f"[DEBUG] Rebuilt teacher_vectorstore with {teacher_vectorstore.index.ntotal} vectors")
-        return {"message": "Индекс для сотрудников (Teacher) был успешно пересобран"}
+        # Similarity check on every file
+        similarity_report = {}
+        for fname in os.listdir(DATA_FOLDER_TEACHERS):
+            if not fname.lower().endswith((".docx", ".pdf", ".txt")):
+                continue
+            fpath = os.path.join(DATA_FOLDER_TEACHERS, fname)
+            text = extract_text_from_file(fpath)
+            sims = find_similar_files(text, DATA_FOLDER_TEACHERS, threshold=0.7)
+            sims = [s for s in sims if s["file"] != fname]
+            if sims:
+                similarity_report[fname] = sims
+
+        resp = {
+            "message": "Staff index rebuilt successfully",
+            "similarity_report": similarity_report
+        }
+        if file:
+            resp["file_action"] = action
+        return resp
+
     except Exception as e:
-        print(f"[ERROR] Failed to refresh staff index: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
+
 @app.post("/refresh/students")
-def refresh_students_index():
-    """
-    Принудительно пересобрать индекс для студентов.
-    """
-    global student_vectorstore, student_qa_chain
-    student_vectorstore = load_or_rebuild_vectorstore(DATA_FOLDER_STUDENTS, INDEXES_FOLDER_STUDENTS)
+def refresh_students_index(
+    file: UploadFile = File(None),
+    replace_doc_id: str = Form(None)
+):
+    try:
+        global student_vectorstore, student_qa_chain
 
-    # Update the QA chain with the new retriever
-    student_qa_chain.retriever = student_vectorstore.as_retriever(search_kwargs={"k": 3})
+        if file:
+            tmp_dir = "temp"
+            os.makedirs(tmp_dir, exist_ok=True)
+            tmp_path = os.path.join(tmp_dir, file.filename)
+            with open(tmp_path, "wb") as f:
+                f.write(file.file.read())
 
-    return {"message": "Индекс для студентов был успешно пересобран"}
+            if replace_doc_id:
+                student_doc_manager.delete_document_by_id(replace_doc_id)
+                new_doc = student_doc_manager.add_document(tmp_path)
+                action = f"Replaced {replace_doc_id} → {new_doc['id']}"
+            else:
+                new_doc = student_doc_manager.add_document(tmp_path)
+                action = f"Added new document {new_doc['id']}"
 
+        student_vectorstore = load_or_rebuild_vectorstore(
+            DATA_FOLDER_STUDENTS,
+            INDEXES_FOLDER_STUDENTS
+        )
+        student_qa_chain.retriever = student_vectorstore.as_retriever(search_kwargs={"k": 3})
+
+        similarity_report = {}
+        for fname in os.listdir(DATA_FOLDER_STUDENTS):
+            if not fname.lower().endswith((".docx", ".pdf", ".txt")):
+                continue
+            fpath = os.path.join(DATA_FOLDER_STUDENTS, fname)
+            text = extract_text_from_file(fpath)
+            sims = find_similar_files(text, DATA_FOLDER_STUDENTS, threshold=0.7)
+            sims = [s for s in sims if s["file"] != fname]
+            if sims:
+                similarity_report[fname] = sims
+
+        resp = {
+            "message": "Student index rebuilt successfully",
+            "similarity_report": similarity_report
+        }
+        if file:
+            resp["file_action"] = action
+        return resp
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+
+
+
+
+@app.post("/api/{role}/docs/upload")
+async def upload_doc(
+    role: str,
+    file: UploadFile = File(...),
+    replace_doc_id: Optional[str] = Form(None)
+):
+    data_folder = DATA_FOLDER_TEACHERS if role=="teacher" else DATA_FOLDER_STUDENTS
+    mgr = teacher_doc_manager if role=="teacher" else student_doc_manager
+
+    content = await file.read()
+    temp_path = os.path.join(data_folder, file.filename)
+    with open(temp_path, "wb") as f:
+        f.write(content)
+
+    if replace_doc_id:
+        mgr.delete_document_by_id(replace_doc_id)
+        new_doc = mgr.add_document(temp_path)
+        action = f"Replaced {replace_doc_id} → {new_doc['id']}"
+    else:
+        new_doc = mgr.add_document(temp_path)
+        action = f"Added new document {new_doc['id']}"
+
+    # rebuild index 
+    idx_folder = INDEXES_FOLDER_TEACHERS if role=="teacher" else INDEXES_FOLDER_STUDENTS
+    vs = load_or_rebuild_vectorstore(data_folder, idx_folder, call_id=f"upload_{role}")
+    if role == "teacher":
+        global teacher_vectorstore, teacher_qa_chain
+        teacher_vectorstore = vs
+        teacher_qa_chain.retriever = vs.as_retriever(search_kwargs={"k": 3})
+    else:
+        global student_vectorstore, student_qa_chain
+        student_vectorstore = vs
+        student_qa_chain.retriever = vs.as_retriever(search_kwargs={"k": 3})
+
+    return {"message":"Done", "file_action":action}
+
+
+
+# =====================
+# Сначала с загруженного файла извлекает данные
+# =====================
+from docx import Document as DocxDocument
+
+def extract_text_from_file(filepath):
+    ext = os.path.splitext(filepath)[1].lower()
+    if ext == '.txt':
+        with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+            return f.read()
+    elif ext == '.docx':
+        doc = DocxDocument(filepath)
+        return '\n'.join([p.text for p in doc.paragraphs])
+    elif ext == '.pdf':
+        text = ''
+        with open(filepath, 'rb') as f:
+            reader = PyPDF2.PdfReader(f)
+            for page in reader.pages:
+                text += page.extract_text() or ''
+        return text
+    else:
+        return ''
+
+# =====================
+# Cosine similarity
+# =====================
+def cosine_similarity(a, b):
+    if not a.any() or not b.any():
+        return 0.0
+    return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
+
+# =====================
+# нормализация текста
+# =====================
+def normalize_text(text):
+    import re
+    text = text.lower().strip()
+    text = re.sub(r'\s+', ' ', text)
+    return text
+
+# =====================
+# схожести ищет
+# =====================
+def find_similar_files(uploaded_text, folder, threshold=0.7):
+    model = SentenceTransformer('all-MiniLM-L12-v2')
+    uploaded_text_norm = normalize_text(uploaded_text)
+    uploaded_emb = model.encode([uploaded_text_norm], convert_to_numpy=True)[0]
+    similar = []
+    print("[DEBUG] Uploaded text (first 200 chars):", uploaded_text_norm[:200])
+    for fname in os.listdir(folder):
+        fpath = os.path.join(folder, fname)
+        if not os.path.isfile(fpath) or not fname.lower().endswith((".docx", ".pdf", ".txt")):
+            continue
+        try:
+            text = extract_text_from_file(fpath)
+            text_norm = normalize_text(text)
+            if not text_norm.strip():
+                continue
+            emb = model.encode([text_norm], convert_to_numpy=True)[0]
+            sim = cosine_similarity(uploaded_emb, emb)
+            print(f"[DEBUG] File: {fname} | Similarity: {sim:.4f} | Text (first 200 chars): {text_norm[:200]}")
+            if sim >= threshold:
+                similar.append({
+                    'file': fname,
+                    'similarity': round(sim * 100, 2)
+                })
+        except Exception as e:
+            print(f"[ERROR] Processing {fname}: {e}")
+            continue
+    similar.sort(key=lambda x: x['similarity'], reverse=True)
+    # если есть 100% similarity, то только его и показываем
+    exact_matches = [f for f in similar if f['similarity'] == 100.0]
+    if exact_matches:
+        return exact_matches
+    # ну либо топ 3
+    return similar[:3]
+
+@app.post("/api/{role}/docs/check_similarity")
+async def check_doc_similarity(
+    role: str,
+    file: UploadFile = File(...)
+):
+    folder = DATA_FOLDER_TEACHERS if role=="teacher" else DATA_FOLDER_STUDENTS
+    tmp = f"temp/{file.filename}"
+    os.makedirs("temp", exist_ok=True)
+    with open(tmp, "wb") as f: f.write(await file.read())
+
+    text = extract_text_from_file(tmp)
+    dups = find_similar_files(text, folder, threshold=0.7)
+    os.remove(tmp)
+    return {"possible_duplicates": dups}
+
+
+@app.post("/api/student/docs/check_similarity")
+def check_student_doc_similarity(file: UploadFile = File(...)):
+    temp_dir = "temp"
+    os.makedirs(temp_dir, exist_ok=True)
+    temp_filepath = os.path.join(temp_dir, file.filename)
+    with open(temp_filepath, "wb") as f:
+        f.write(file.file.read())
+    uploaded_text = extract_text_from_file(temp_filepath)
+    similar_files = find_similar_files(uploaded_text, DATA_FOLDER_STUDENTS, threshold=0.7)
+    os.remove(temp_filepath)
+    return {"possible_duplicates": similar_files if similar_files else []}
 
 if __name__ == "__main__":
     import uvicorn
