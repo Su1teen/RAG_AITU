@@ -17,3 +17,6 @@ chardet
 tqdm
 razdel
 python-multipart
+openpyxl
+pandas
+openpyxl python-pptx
