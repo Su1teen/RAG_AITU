@@ -19,4 +19,5 @@ razdel
 python-multipart
 openpyxl
 pandas
-openpyxl python-pptx
+openpyxl
+python-pptx
