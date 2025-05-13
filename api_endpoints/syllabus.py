@@ -24,10 +24,14 @@ logger = logging.getLogger(__name__)
 try:
 <<<<<<< HEAD
     tesseract_path = os.getenv("TESSERACT_PATH")
+<<<<<<< HEAD
     pytesseract.pytesseract.tesseract_cmd = tesseract_path # Update this path for the server
 =======
     pytesseract.pytesseract.tesseract_cmd = r"C:/Program Files/Tesseract-OCR/tesseract.exe"  # Update this path for the server
 >>>>>>> 54fff93 (generate)
+=======
+    pytesseract.pytesseract.tesseract_cmd = tesseract_path  # Update this path for the server
+>>>>>>> dbb1288 (Объединил два эндпойнта в один)
     pytesseract.get_tesseract_version()
     logger.info("Tesseract is accessible")
 except Exception as e:
@@ -36,13 +40,9 @@ except Exception as e:
 
 
 # ---------- Pydantic модели ----------
-class MoodleCredentials(BaseModel):
+class SyllabusRequest(BaseModel):
     token: str
     webservices_url: str = "https://moodle.astanait.edu.kz/webservice/rest/server.php"
-
-
-class SyllabusVerificationRequest(BaseModel):
-    folder_path: str
 
 
 # ---------- Moodle клиент ----------
@@ -434,14 +434,15 @@ def verify_documents(folder_path):
     return final_report
 
 
-# ---------- FastAPI endpoints ----------
-@router.post("/download-syllabuses")
-async def download_syllabuses(credentials: MoodleCredentials):
+# ---------- FastAPI endpoint ----------
+@router.post("/process-syllabuses")
+async def process_syllabuses(request: SyllabusRequest):
     """
-    Downloads syllabuses from Moodle using the provided credentials and verifies if they have stamps and signatures.
+    Downloads syllabuses from Moodle using the provided token and verifies if they have stamps and signatures.
     """
     try:
-        if not credentials.token or len(credentials.token) < 32:
+        # Validate token
+        if not request.token or len(request.token) < 32:
             raise HTTPException(status_code=400, detail="Invalid or missing Moodle token")
 
         # Create temporary directory for the syllabuses
@@ -449,75 +450,47 @@ async def download_syllabuses(credentials: MoodleCredentials):
         os.makedirs(temp_dir, exist_ok=True)
         logger.info(f"Created temporary directory: {temp_dir}")
 
-        # Initialize client and downloader
-        client = MoodleClient(credentials.webservices_url, credentials.token)
-        downloader = SyllabusDownloader(temp_dir)
+        try:
+            # Initialize client and downloader
+            client = MoodleClient(request.webservices_url, request.token)
+            downloader = SyllabusDownloader(temp_dir)
 
-        # Download syllabuses
-        syllabuses = downloader.download_syllabuses(client)
-        logger.info(f"Downloaded {len(syllabuses)} syllabuses: {syllabuses}")
+            # Download syllabuses
+            syllabuses = downloader.download_syllabuses(client)
+            logger.info(f"Downloaded {len(syllabuses)} syllabuses: {syllabuses}")
 
-        # Ensure files are written before verification
-        time.sleep(1)  # Temporary delay to ensure files are fully written
+            # Ensure files are written before verification
+            time.sleep(1)  # Temporary delay to ensure files are fully written
 
-        if not syllabuses:
-            shutil.rmtree(temp_dir, ignore_errors=True)
-            return {
-                "message": "No syllabuses found",
-                "files": [],
-                "verification_result": "No files to verify"
+            if not syllabuses:
+                return {
+                    "message": "No syllabuses found",
+                    "files": [],
+                    "verification_result": "No files to verify"
+                }
+
+            # Verify the documents
+            verification_result = verify_documents(temp_dir)
+
+            response = {
+                "message": "Syllabuses downloaded and verified",
+                "files": [os.path.basename(path) for path in syllabuses],
+                "verification_result": verification_result
             }
 
-        # Verify the documents
-        verification_result = verify_documents(temp_dir)
+            return response
+        finally:
+            # Clean up the temporary directory
+            if os.path.exists(temp_dir):
+                shutil.rmtree(temp_dir, ignore_errors=True)
+                logger.info(f"Removed temporary directory: {temp_dir}")
 
-        response = {
-            "message": "Syllabuses downloaded and verified",
-            "files": [os.path.basename(path) for path in syllabuses],
-            "verification_result": verification_result
-        }
+            # Make sure debug images are cleaned up
+            cleanup_debug_folder()
 
-        # Clean up the temporary directory
-        shutil.rmtree(temp_dir, ignore_errors=True)
-        logger.info(f"Removed temporary directory: {temp_dir}")
-
-        # Make sure debug images are cleaned up
-        cleanup_debug_folder()
-
-        return response
-    except Exception as e:
-        # Clean up if an error occurs
-        if 'temp_dir' in locals() and os.path.exists(temp_dir):
-            shutil.rmtree(temp_dir, ignore_errors=True)
-
-        # Also clean debug folder in case of error
-        cleanup_debug_folder()
-
-        logger.error(f"Error processing request: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error processing request: {str(e)}")
-
-
-@router.post("/verify-syllabuses")
-async def verify_syllabuses(request: SyllabusVerificationRequest):
-    """
-    Verifies if syllabuses in the specified folder have stamps and signatures.
-    """
-    try:
-        if not os.path.isdir(request.folder_path):
-            raise HTTPException(status_code=400, detail="Invalid or non-existent folder path")
-
-        verification_result = verify_documents(request.folder_path)
-
-        # Make sure debug images are cleaned up
-        cleanup_debug_folder()
-
-        return {
-            "message": "Syllabuses verified",
-            "verification_result": verification_result
-        }
     except Exception as e:
         # Clean up debug folder in case of error
         cleanup_debug_folder()
 
-        logger.error(f"Error verifying syllabuses: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error verifying syllabuses: {str(e)}")
+        logger.error(f"Error processing syllabuses: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error processing syllabuses: {str(e)}")

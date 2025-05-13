@@ -21,3 +21,4 @@ openpyxl
 pandas
 openpyxl
 python-pptx
+docxtpl
