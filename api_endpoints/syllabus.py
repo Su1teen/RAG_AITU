@@ -22,8 +22,12 @@ logger = logging.getLogger(__name__)
 
 # ---------- Проверка Tesseract ----------
 try:
+<<<<<<< HEAD
     tesseract_path = os.getenv("TESSERACT_PATH")
     pytesseract.pytesseract.tesseract_cmd = tesseract_path # Update this path for the server
+=======
+    pytesseract.pytesseract.tesseract_cmd = r"C:/Program Files/Tesseract-OCR/tesseract.exe"  # Update this path for the server
+>>>>>>> 54fff93 (generate)
     pytesseract.get_tesseract_version()
     logger.info("Tesseract is accessible")
 except Exception as e:
