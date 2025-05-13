@@ -22,7 +22,8 @@ logger = logging.getLogger(__name__)
 
 # ---------- Проверка Tesseract ----------
 try:
-    pytesseract.pytesseract.tesseract_cmd = r"E:/Games/tesseract.exe"  # Update this path for the server
+    tesseract_path = os.getenv("TESSERACT_PATH")
+    pytesseract.pytesseract.tesseract_cmd = tesseract_path # Update this path for the server
     pytesseract.get_tesseract_version()
     logger.info("Tesseract is accessible")
 except Exception as e:
@@ -106,6 +107,21 @@ class SyllabusDownloader:
 # ---------- Проверка документов на штампы и подписи ----------
 DEBUG_FOLDER = "debug_stamps"
 os.makedirs(DEBUG_FOLDER, exist_ok=True)
+
+
+# Helper function to clean up debug images
+def cleanup_debug_folder():
+    """Removes all files from the debug folder to save disk space"""
+    if os.path.exists(DEBUG_FOLDER):
+        for file in os.listdir(DEBUG_FOLDER):
+            file_path = os.path.join(DEBUG_FOLDER, file)
+            try:
+                if os.path.isfile(file_path):
+                    os.unlink(file_path)
+                    logger.debug(f"Deleted debug file: {file_path}")
+            except Exception as e:
+                logger.error(f"Error deleting {file_path}: {e}")
+        logger.info(f"Debug folder cleaned up: {DEBUG_FOLDER}")
 
 
 def extract_images_from_pdf(pdf_path):
@@ -407,6 +423,10 @@ def verify_documents(folder_path):
         for doc in good_documents:
             final_report += f"- **{doc}**\n"
     logger.info(f"Final report: {final_report}")
+
+    # Clean up debug images after verification
+    cleanup_debug_folder()
+
     return final_report
 
 
@@ -457,11 +477,17 @@ async def download_syllabuses(credentials: MoodleCredentials):
         shutil.rmtree(temp_dir, ignore_errors=True)
         logger.info(f"Removed temporary directory: {temp_dir}")
 
+        # Make sure debug images are cleaned up
+        cleanup_debug_folder()
+
         return response
     except Exception as e:
         # Clean up if an error occurs
         if 'temp_dir' in locals() and os.path.exists(temp_dir):
             shutil.rmtree(temp_dir, ignore_errors=True)
+
+        # Also clean debug folder in case of error
+        cleanup_debug_folder()
 
         logger.error(f"Error processing request: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error processing request: {str(e)}")
@@ -478,10 +504,16 @@ async def verify_syllabuses(request: SyllabusVerificationRequest):
 
         verification_result = verify_documents(request.folder_path)
 
+        # Make sure debug images are cleaned up
+        cleanup_debug_folder()
+
         return {
             "message": "Syllabuses verified",
             "verification_result": verification_result
         }
     except Exception as e:
+        # Clean up debug folder in case of error
+        cleanup_debug_folder()
+
         logger.error(f"Error verifying syllabuses: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error verifying syllabuses: {str(e)}")
