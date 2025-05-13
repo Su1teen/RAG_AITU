@@ -59,10 +59,10 @@ def load_or_rebuild_vectorstore(data_folder: str, indexes_folder: str, call_id: 
     print("[INFO] Building/rebuilding index from documents...")
     chunks = process_document_folder(
         data_folder,
-        min_words_per_page=100,
+        min_words_per_page=30,
         target_chunk_size=512,
         min_chunk_size=256,
-        overlap_size=150
+        overlap_size=200
     )
     print(f"[DEBUG] Generated {len(chunks)} chunks")
 

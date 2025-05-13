@@ -15,9 +15,11 @@ from langchain.chains.conversational_retrieval.base import ConversationalRetriev
 
 router = APIRouter()
 
+# Initialize document managers
 teacher_doc_manager = DocumentManager(DATA_FOLDER_TEACHERS)
 student_doc_manager = DocumentManager(DATA_FOLDER_STUDENTS)
 
+# Initialize vectorstores and LLM (only once)
 teacher_vectorstore = load_or_rebuild_vectorstore(DATA_FOLDER_TEACHERS, INDEXES_FOLDER_TEACHERS)
 student_vectorstore = load_or_rebuild_vectorstore(DATA_FOLDER_STUDENTS, INDEXES_FOLDER_STUDENTS)
 llm = ChatOpenAI(openai_api_key=OPENAI_API_KEY, temperature=0, model_name="gpt-4o-mini")
@@ -68,10 +70,6 @@ async def check_doc_similarity(
     return {"possible_duplicates": dups}
 
 # --- Analyze endpoints for instant file analysis (teacher: web, student: telegram) ---
-
-teacher_vectorstore = load_or_rebuild_vectorstore(DATA_FOLDER_TEACHERS, INDEXES_FOLDER_TEACHERS)
-student_vectorstore = load_or_rebuild_vectorstore(DATA_FOLDER_STUDENTS, INDEXES_FOLDER_STUDENTS)
-llm = ChatOpenAI(openai_api_key=OPENAI_API_KEY, temperature=0, model_name="gpt-4o-mini")
 
 @router.post("/teacher/docs/analyze")
 async def analyze_teacher_doc(file: UploadFile = File(...), question: str = Form("")):
