@@ -8,6 +8,7 @@ import tempfile
 from tqdm import tqdm
 from razdel import sentenize
 import warnings
+from typing import List, Dict, Optional, Union, Any
 warnings.filterwarnings("ignore", message="CropBox missing from /Page, defaulting to MediaBox")
 
 # в общем-то оно уникальное, надо его в PATH ещё добавить
@@ -203,16 +204,35 @@ def process_document(file_path, min_words_per_page=50, target_chunk_size=512, mi
         print(f"[INFO] File {file_metadata['file_name']} produced less than 50 characters; proceeding anyway.")
     return create_chunks_by_sentence(text, file_metadata, target_chunk_size, min_chunk_size, overlap_size)
 
-def process_document_folder(folder_path, **kwargs):
-    """
-    Рекурсивно обработает все поддерживаемые документы в папке.
-    Возвращает список всех словарей фрагментов.
-    """
-    all_chunks = []
+def process_document_folder(
+    folder_path: str,
+    min_words_per_page: int = 100,
+    target_chunk_size: int = 512,
+    min_chunk_size: int = 256,
+    overlap_size: int = 150,
+    include_metadata: bool = True  # Add this parameter
+) -> List[Dict]:
+    chunks = []
     for root, _, files in os.walk(folder_path):
         for file in files:
-            if file.lower().endswith(('.docx', '.pdf', '.txt')):
+            if file.lower().endswith(('.pdf', '.docx', '.txt')):
                 file_path = os.path.join(root, file)
-                chunks = process_document(file_path, **kwargs)
-                all_chunks.extend(chunks)
-    return all_chunks
+                doc_chunks = process_document(
+                    file_path,
+                    min_words_per_page,
+                    target_chunk_size,
+                    min_chunk_size,
+                    overlap_size
+                )
+                
+                #Ensure metadata is added for each chunk
+                for i, chunk in enumerate(doc_chunks):
+                    if include_metadata:
+                        chunk["metadata"] = {
+                            "file_name": file,
+                            "page": chunk.get("page", 0),
+                            "source": file_path,
+                            "chunk": i
+                        }
+                    chunks.extend(doc_chunks)
+    return chunks
