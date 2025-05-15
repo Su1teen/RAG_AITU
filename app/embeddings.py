@@ -10,3 +10,5 @@ class MyEmbeddings(Embeddings):
 
     def embed_query(self, text):
         return self.model.encode([text], convert_to_numpy=True)[0].tolist()
+
+embeddings = MyEmbeddings()
