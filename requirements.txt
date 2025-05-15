@@ -17,6 +17,8 @@ chardet
 tqdm
 razdel
 python-multipart
-openpyxl
 pandas
+openpyxl
+python-pptx
+docxtpl
 huggingface_hub[hf_xet]
