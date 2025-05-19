@@ -5,7 +5,6 @@ from langchain_community.vectorstores import FAISS as LC_FAISS
 from langchain.docstore.document import Document as LCDocument, Document
 from data_management.document_processor import process_document_folder
 from app.embeddings import embeddings
-
 def load_or_rebuild_vectorstore(data_folder: str, indexes_folder: str, call_id: str = "") -> LC_FAISS:
     os.makedirs(indexes_folder, exist_ok=True)
     fingerprint_file = os.path.join(indexes_folder, "index_fingerprint.json")
