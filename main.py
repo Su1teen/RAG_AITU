@@ -7,7 +7,7 @@ from api_endpoints.flowchart import router as flowchart_router
 from api_endpoints.docs import router as docs_router
 from api_endpoints.chat import router as chat_router
 from api_endpoints.generate import router as generate_router
-from api_endpoints.syllabus import router as syllabus_router
+#from api_endpoints.syllabus import router as syllabus_router
 
 from app.config import DATA_FOLDER_TEACHERS, INDEXES_FOLDER_TEACHERS, DATA_FOLDER_STUDENTS, INDEXES_FOLDER_STUDENTS
 from data_management.vectorstore_utils import load_or_rebuild_vectorstore

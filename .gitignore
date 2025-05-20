@@ -3,14 +3,10 @@ __pycache__/
 *.pyc
 # Local data & indexes
 data/
-data_stud/
+#data_stud/
 indexes/
-indexes_stud/
+#indexes_stud/
 temp/
-<<<<<<< HEAD
-Новая папка/
-=======
 legal_data/
 legal_indexes/
 debug_stamps/
->>>>>>> 9863543 (Добавил очистку debug_stamps папки при обработке силлабусов)

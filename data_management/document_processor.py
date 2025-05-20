@@ -7,8 +7,41 @@ from pdf2image import convert_from_path
 import tempfile
 from tqdm import tqdm
 from razdel import sentenize
-import warnings
-warnings.filterwarnings("ignore", message="CropBox missing from /Page, defaulting to MediaBox")
+from typing import List, Dict, Optional, Union, Any
+import logging
+import sys
+import io
+from contextlib import contextmanager
+
+# Create a custom context manager to suppress specific output
+class SuppressOutput:
+    def __init__(self, suppress_texts=None):
+        self.suppress_texts = suppress_texts or []
+        self.captured_stderr = io.StringIO()
+        self.captured_stdout = io.StringIO()
+    
+    def __enter__(self):
+        self.old_stderr = sys.stderr
+        self.old_stdout = sys.stdout
+        sys.stderr = self.captured_stderr
+        sys.stdout = self.captured_stdout
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        sys.stderr = self.old_stderr
+        sys.stdout = self.old_stdout
+        
+        # Filter out suppressed texts
+        stderr_content = self.captured_stderr.getvalue()
+        stdout_content = self.captured_stdout.getvalue()
+        
+        for text in self.captured_stdout.getvalue().splitlines():
+            if not any(suppress_text in text for suppress_text in self.suppress_texts):
+                print(text)
+        
+        for text in self.captured_stderr.getvalue().splitlines():
+            if not any(suppress_text in text for suppress_text in self.suppress_texts):
+                print(text, file=sys.stderr)
 
 # в общем-то оно уникальное, надо его в PATH ещё добавить
 TESSERACT_CMD = 'C:/Program Files/Tesseract-OCR/tesseract.exe'
@@ -33,6 +66,37 @@ def extract_text_from_docx(file_path):
     except Exception as e:
         print(f"[ERROR] Error processing DOCX {file_path}: {e}")
         return ""
+@contextmanager
+def suppress_specific_messages(suppress_texts):
+    """Context manager to suppress specific text messages from stdout/stderr."""
+    class FilteredWriter:
+        def __init__(self, original, suppress_texts):
+            self.original = original
+            self.suppress_texts = suppress_texts
+            self.buffer = ""
+        
+        def write(self, text):
+            self.buffer += text
+            if '\n' in self.buffer:
+                lines = self.buffer.split('\n')
+                self.buffer = lines.pop()
+                for line in lines:
+                    if not any(suppress_text in line for suppress_text in self.suppress_texts):
+                        self.original.write(line + '\n')
+        
+        def flush(self):
+            self.original.flush()
+    
+    stdout_filter = FilteredWriter(sys.stdout, suppress_texts)
+    stderr_filter = FilteredWriter(sys.stderr, suppress_texts)
+    
+    old_stdout, old_stderr = sys.stdout, sys.stderr
+    sys.stdout, sys.stderr = stdout_filter, stderr_filter
+    
+    try:
+        yield
+    finally:
+        sys.stdout, sys.stderr = old_stdout, old_stderr
 
 def extract_text_from_pdf(file_path, min_words_per_page=50):
     """
@@ -44,34 +108,37 @@ def extract_text_from_pdf(file_path, min_words_per_page=50):
     page_word_counts = []
     pages_info = []
     try:
-        with pdfplumber.open(file_path) as pdf:
-            num_pages = len(pdf.pages)
-            for i, page in enumerate(pdf.pages):
-                try:
-                    page_text = page.extract_text() or ""
-                except Exception as e:
-                    print(f"[ERROR] Text extraction failed on page {i+1} of {file_path}: {e}")
-                    page_text = ""
-                word_count = len(page_text.split())
-                page_word_counts.append(word_count)
-                pages_info.append({'page_number': i+1, 'word_count': word_count})
-                text_pages.append(page_text)
-        full_text = "\n".join(text_pages)
-        avg_words = sum(page_word_counts) / len(page_word_counts) if page_word_counts else 0
+        # Use the context manager to suppress CropBox warnings
+        with suppress_specific_messages(["CropBox missing from /Page, defaulting to MediaBox"]):
+            with pdfplumber.open(file_path) as pdf:
+                num_pages = len(pdf.pages)
+                for i, page in enumerate(pdf.pages):
+                    try:
+                        page_text = page.extract_text() or ""
+                    except Exception as e:
+                        print(f"[ERROR] Text extraction failed on page {i+1} of {file_path}: {e}")
+                        page_text = ""
+                    word_count = len(page_text.split())
+                    page_word_counts.append(word_count)
+                    pages_info.append({'page_number': i+1, 'word_count': word_count})
+                    text_pages.append(page_text)
+            
+            full_text = "\n".join(text_pages)
+            avg_words = sum(page_word_counts) / len(page_word_counts) if page_word_counts else 0
 
-        metadata = {
-            'file_type': 'pdf',
-            'num_pages': num_pages,
-            'avg_words_per_page': avg_words,
-            'pages_info': pages_info,
-            'ocr_used': False
-        }
-        if avg_words < min_words_per_page:
-            print(f"[INFO] Low average words per page ({avg_words:.2f} < {min_words_per_page}) for {file_path}. Switching to OCR.")
-            full_text = extract_text_from_pdf_with_ocr(file_path)
-            metadata['ocr_used'] = True
-        
-        return full_text, metadata
+            metadata = {
+                'file_type': 'pdf',
+                'num_pages': num_pages,
+                'avg_words_per_page': avg_words,
+                'pages_info': pages_info,
+                'ocr_used': False
+            }
+            if avg_words < min_words_per_page:
+                print(f"[INFO] Low average words per page ({avg_words:.2f} < {min_words_per_page}) for {file_path}. Switching to OCR.")
+                full_text = extract_text_from_pdf_with_ocr(file_path)
+                metadata['ocr_used'] = True
+            
+            return full_text, metadata
     except Exception as e:
         print(f"[ERROR] Error processing PDF {file_path}: {e}")
         return "", {}
@@ -203,16 +270,35 @@ def process_document(file_path, min_words_per_page=50, target_chunk_size=512, mi
         print(f"[INFO] File {file_metadata['file_name']} produced less than 50 characters; proceeding anyway.")
     return create_chunks_by_sentence(text, file_metadata, target_chunk_size, min_chunk_size, overlap_size)
 
-def process_document_folder(folder_path, **kwargs):
-    """
-    Рекурсивно обработает все поддерживаемые документы в папке.
-    Возвращает список всех словарей фрагментов.
-    """
-    all_chunks = []
+def process_document_folder(
+    folder_path: str,
+    min_words_per_page: int = 100,
+    target_chunk_size: int = 512,
+    min_chunk_size: int = 256,
+    overlap_size: int = 150,
+    include_metadata: bool = True  # Add this parameter
+) -> List[Dict]:
+    chunks = []
     for root, _, files in os.walk(folder_path):
         for file in files:
-            if file.lower().endswith(('.docx', '.pdf', '.txt')):
+            if file.lower().endswith(('.pdf', '.docx', '.txt')):
                 file_path = os.path.join(root, file)
-                chunks = process_document(file_path, **kwargs)
-                all_chunks.extend(chunks)
-    return all_chunks
+                doc_chunks = process_document(
+                    file_path,
+                    min_words_per_page,
+                    target_chunk_size,
+                    min_chunk_size,
+                    overlap_size
+                )
+                
+                #Ensure metadata is added for each chunk
+                for i, chunk in enumerate(doc_chunks):
+                    if include_metadata:
+                        chunk["metadata"] = {
+                            "file_name": file,
+                            "page": chunk.get("page", 0),
+                            "source": file_path,
+                            "chunk": i
+                        }
+                chunks.extend(doc_chunks)
+    return chunks
