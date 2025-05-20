@@ -28,7 +28,8 @@ app.include_router(flowchart_router, prefix="/api")
 app.include_router(docs_router, prefix="/api")
 app.include_router(chat_router, prefix="/api")
 app.include_router(generate_router, prefix="/api")
-app.include_router(syllabus_router)  # Remove prefix="/api" since router already has it
+#
+# app.include_router(syllabus_router)  # Remove prefix="/api" since router already has it
 @app.post("/refresh/staff")
 async def refresh_staff_index():
     try:
