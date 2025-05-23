@@ -3,15 +3,12 @@ from fastapi.responses import JSONResponse
 import os
 import tempfile
 import shutil
-from app.config import DATA_FOLDER_TEACHERS, DATA_FOLDER_STUDENTS, INDEXES_FOLDER_TEACHERS, INDEXES_FOLDER_STUDENTS, OPENAI_API_KEY
+from app.config import DATA_FOLDER_TEACHERS, DATA_FOLDER_STUDENTS
 from data_management.document_manager import DocumentManager
-from data_management.vectorstore_utils import load_or_rebuild_vectorstore
 from app.utils import extract_text_from_file, find_similar_files
 from app.prompts import get_teacher_prompt_template, get_student_prompt_template
-from app.embeddings import embeddings
-from langchain_openai import ChatOpenAI
+from app.vectorstore_singleton import get_teacher_vectorstore, get_student_vectorstore, get_llm, refresh_teacher_vectorstore, refresh_student_vectorstore
 from langchain.prompts.prompt import PromptTemplate
-from langchain.chains.conversational_retrieval.base import ConversationalRetrievalChain
 
 router = APIRouter()
 
@@ -19,10 +16,10 @@ router = APIRouter()
 teacher_doc_manager = DocumentManager(DATA_FOLDER_TEACHERS)
 student_doc_manager = DocumentManager(DATA_FOLDER_STUDENTS)
 
-# Initialize vectorstores and LLM (only once)
-teacher_vectorstore = load_or_rebuild_vectorstore(DATA_FOLDER_TEACHERS, INDEXES_FOLDER_TEACHERS)
-student_vectorstore = load_or_rebuild_vectorstore(DATA_FOLDER_STUDENTS, INDEXES_FOLDER_STUDENTS)
-llm = ChatOpenAI(openai_api_key=OPENAI_API_KEY, temperature=0, model_name="gpt-4o-mini")
+# Get vectorstores and LLM from singleton
+teacher_vectorstore = get_teacher_vectorstore()
+student_vectorstore = get_student_vectorstore()
+llm = get_llm()
 
 @router.get("/teacher/docs")
 def list_teacher_docs():
@@ -51,7 +48,13 @@ async def upload_doc(
     else:
         new_doc = mgr.add_document(temp_path)
         action = f"Added new document {new_doc['id']}"
-    # DO NOT rebuild index here! Only update metadata.
+    
+    # Refresh the appropriate vectorstore
+    if role == "teacher":
+        refresh_teacher_vectorstore()
+    else:
+        refresh_student_vectorstore()
+        
     return {"message": "Done", "file_action": action}
 
 @router.post("/{role}/docs/check_similarity")

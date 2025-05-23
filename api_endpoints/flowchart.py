@@ -7,13 +7,13 @@ from app.config import DATA_FOLDER_TEACHERS, DATA_FOLDER_STUDENTS, OPENAI_API_KE
 from data_management.vectorstore_utils import load_or_rebuild_vectorstore
 from app.prompts import get_teacher_flowchart_prompt, get_student_flowchart_prompt
 from app.embeddings import embeddings
+from app.vectorstore_singleton import get_teacher_vectorstore, get_student_vectorstore, get_llm
 from langchain_openai import ChatOpenAI
 from langchain_community.vectorstores import FAISS as LC_FAISS
 
 router = APIRouter()
-
-teacher_vectorstore = load_or_rebuild_vectorstore(DATA_FOLDER_TEACHERS, INDEXES_FOLDER_TEACHERS)
-student_vectorstore = load_or_rebuild_vectorstore(DATA_FOLDER_STUDENTS, INDEXES_FOLDER_STUDENTS)
+teacher_vectorstore = get_teacher_vectorstore()
+student_vectorstore = get_student_vectorstore()
 llm = ChatOpenAI(openai_api_key=OPENAI_API_KEY, temperature=0, model_name="gpt-4o-mini")
 
 class ChatRequest(BaseModel):

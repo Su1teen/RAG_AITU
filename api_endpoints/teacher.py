@@ -20,7 +20,7 @@ teacher_prompt = PromptTemplate(
 )
 teacher_qa_chain = ConversationalRetrievalChain.from_llm(
     llm,
-    retriever=teacher_vectorstore.as_retriever(search_kwargs={"k": 3}),
+    retriever=teacher_vectorstore.as_retriever(search_kwargs={"k": 7}),
     return_source_documents=True,
     combine_docs_chain_kwargs={"prompt": teacher_prompt}
 )
